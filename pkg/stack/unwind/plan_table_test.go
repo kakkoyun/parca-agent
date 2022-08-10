@@ -19,12 +19,12 @@ import (
 	"github.com/go-kit/log"
 	"github.com/stretchr/testify/require"
 
-	"github.com/parca-dev/parca-agent/pkg/maps"
+	"github.com/parca-dev/parca-agent/pkg/process"
 )
 
 func TestBuildPlanTable(t *testing.T) {
 	logger := log.NewNopLogger()
-	ptb := NewPlanTableBuilder(logger, maps.NewPIDMappingFileCache(logger))
+	ptb := NewPlanTableBuilder(logger, process.NewMappingFileCache(logger))
 
 	fdes, err := ptb.readFDEs("testdata/pie-dynamic", 0)
 	require.NoError(t, err)

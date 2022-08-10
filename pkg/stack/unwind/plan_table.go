@@ -24,16 +24,22 @@ import (
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/goburrow/cache"
+	"github.com/google/pprof/profile"
 
 	"github.com/parca-dev/parca-agent/internal/dwarf/frame"
+
 	"github.com/parca-dev/parca-agent/pkg/buildid"
-	"github.com/parca-dev/parca-agent/pkg/maps"
 )
 
+type MappingCache interface {
+	MappingForPID(pid int) ([]*profile.Mapping, error)
+}
+
+// TODO(kakkoyun): Can we speed parsin using or look up using .eh_frame_hdr?
 type PlanTableBuilder struct {
-	logger    log.Logger
-	fileCache *maps.PIDMappingFileCache
-	fdeCache  cache.Cache
+	logger       log.Logger
+	mappingCache MappingCache
+	fdeCache     cache.Cache
 }
 
 // TODO(kakkoyun): A better type?
@@ -82,13 +88,13 @@ func (t PlanTable) Len() int           { return len(t) }
 func (t PlanTable) Less(i, j int) bool { return t[i].Begin < t[j].Begin }
 func (t PlanTable) Swap(i, j int)      { t[i], t[j] = t[j], t[i] }
 
-func NewPlanTableBuilder(logger log.Logger, fileCache *maps.PIDMappingFileCache) *PlanTableBuilder {
-	return &PlanTableBuilder{logger: logger, fileCache: fileCache, fdeCache: cache.New(cache.WithMaximumSize(128))}
+func NewPlanTableBuilder(logger log.Logger, mappingCache MappingCache) *PlanTableBuilder {
+	return &PlanTableBuilder{logger: logger, mappingCache: mappingCache, fdeCache: cache.New(cache.WithMaximumSize(128))}
 }
 
-func (ptb *PlanTableBuilder) PlanTableForPid(pid uint32) (PlanTable, error) {
+func (ptb *PlanTableBuilder) PlanTableForPid(pid int) (PlanTable, error) {
 	level.Warn(ptb.logger).Log("msg", "unwind.PlanTableForPid", "pid", pid)
-	mappings, err := ptb.fileCache.MappingForPID(pid)
+	mappings, err := ptb.mappingCache.MappingForPID(pid)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +131,11 @@ func (ptb *PlanTableBuilder) readFDEs(path string, start uint64) (frame.FrameDes
 	}
 
 	if fde, ok := ptb.fdeCache.GetIfPresent(buildID); ok {
-		return fde.(frame.FrameDescriptionEntries), nil
+		v, ok := fde.(frame.FrameDescriptionEntries)
+		if !ok {
+			return nil, fmt.Errorf("invalid type of cached FDEs")
+		}
+		return v, nil
 	}
 
 	obj, err := elf.Open(path)
@@ -165,11 +175,15 @@ func buildTable(fdes frame.FrameDescriptionEntries) PlanTable {
 	for _, fde := range fdes {
 		table = append(table, buildTableRow(fde))
 	}
+	// TODO(kakkayun): Print table and debug.
+	// Comparison with readelf -wF and llvm-dwarfdump --eh-frame.
 
+	// Using tests!
 	return table
 }
 
-func buildTableRow(fde *frame.FrameDescriptionEntry) PlanTableRow {
+func buildTableRow(fde *frame.DescriptionEntry) PlanTableRow {
+	// TODO(kakkoyun): Calculate relative address for the process?
 	row := PlanTableRow{
 		Begin: fde.Begin(),
 		End:   fde.End(),
@@ -198,6 +212,7 @@ func buildTableRow(fde *frame.FrameDescriptionEntry) PlanTableRow {
 		row.RIP = Instruction{Op: OpUnimplemented}
 	}
 
+	// TODO(kakkoyun): Return address? Is it in eBPF?
 	row.RSP = Instruction{Op: OpRegister, Reg: fc.CFA.Reg, Off: fc.CFA.Offset}
 	return row
 }
