@@ -26,10 +26,10 @@ func TestBuildPlanTable(t *testing.T) {
 	logger := log.NewNopLogger()
 	ptb := NewPlanTableBuilder(logger, process.NewMappingFileCache(logger))
 
-	fdes, err := ptb.readFDEs("testdata/pie-dynamic", 0)
+	fdes, err := ptb.ReadFDEs("testdata/pie-dynamic", 0)
 	require.NoError(t, err)
 
-	planTable := buildTable(fdes)
+	planTable := BuildTable(fdes)
 	require.Equal(t, len(fdes), len(planTable))
 	require.Equal(t, uint64(0xfb6960), planTable[0].Begin)
 	require.Equal(t, uint64(0xfb698f), planTable[0].End)

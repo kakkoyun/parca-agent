@@ -80,6 +80,8 @@ func (i Instruction) Bytes(order binary.ByteOrder) ([]byte, error) {
 type PlanTableRow struct {
 	Begin, End uint64
 	RIP, RSP   Instruction
+	// Raw instructions stream for debugging purposes.
+	RawInstructions []byte
 }
 
 type PlanTable []PlanTableRow
@@ -110,13 +112,13 @@ func (ptb *PlanTableBuilder) PlanTableForPid(pid int) (PlanTable, error) {
 		}
 
 		abs := path.Join(fmt.Sprintf("/proc/%d/root", pid), m.File)
-		fdes, err := ptb.readFDEs(abs, m.Start)
+		fdes, err := ptb.ReadFDEs(abs, m.Start)
 		if err != nil {
 			level.Warn(ptb.logger).Log("msg", "failed to read frame description entries", "obj", abs, "err", err)
 			continue
 		}
 
-		res = append(res, buildTable(fdes))
+		res = append(res, BuildTable(fdes))
 	}
 
 	// TODO(kakkoyun): Merge and order instructions of PlanTables.
@@ -124,7 +126,7 @@ func (ptb *PlanTableBuilder) PlanTableForPid(pid int) (PlanTable, error) {
 	return res[0], nil
 }
 
-func (ptb *PlanTableBuilder) readFDEs(path string, start uint64) (frame.FrameDescriptionEntries, error) {
+func (ptb *PlanTableBuilder) ReadFDEs(path string, start uint64) (frame.FrameDescriptionEntries, error) {
 	buildID, err := buildid.BuildID(path)
 	if err != nil {
 		return nil, err
@@ -170,7 +172,7 @@ func (ptb *PlanTableBuilder) readFDEs(path string, start uint64) (frame.FrameDes
 	return fde, nil
 }
 
-func buildTable(fdes frame.FrameDescriptionEntries) PlanTable {
+func BuildTable(fdes frame.FrameDescriptionEntries) PlanTable {
 	table := make(PlanTable, 0, len(fdes))
 	for _, fde := range fdes {
 		table = append(table, buildTableRow(fde))
@@ -189,7 +191,8 @@ func buildTableRow(fde *frame.DescriptionEntry) PlanTableRow {
 		End:   fde.End(),
 	}
 
-	fc := frame.ExecuteDwarfProgram(fde)
+	fc, instructions := frame.ExecuteDwarfProgram(fde)
+	row.RawInstructions = instructions
 
 	// TODO(kakkoyun): Validate.
 	// TODO(kakkoyun): Filter noop instructions.
