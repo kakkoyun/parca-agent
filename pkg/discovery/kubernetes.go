@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/util/strutil"
 	v1 "k8s.io/api/core/v1"
@@ -126,7 +127,10 @@ func (g *PodDiscoverer) buildGroup(pod *v1.Pod, containers []*kubernetes.Contain
 		})
 		tg.PIDs = append(tg.PIDs, container.PID)
 	}
+	level.Debug(g.logger).Log("msg", "added target group", "key", tg.Source, "targets", fmt.Sprintf("%+v", tg.Targets), "pids", fmt.Sprintf("%+v", tg.PIDs))
 
+	// TODO(kakkoyun): What to do targets without PIDs?
+	// - Why we have one PID per container?
 	return tg
 }
 

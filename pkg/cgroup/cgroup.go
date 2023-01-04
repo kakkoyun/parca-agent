@@ -1,30 +1,13 @@
-// Copyright 2022 The Parca Authors
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-package containerruntimes
+package cgroup
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"unsafe"
-
-	ocispec "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 /*
@@ -74,12 +57,8 @@ uint64_t get_cgroupid(char *path) {
 */
 import "C"
 
-// CRIClient defines the interface to interact with the container runtime interfaces.
-type CRIClient interface {
-	Close() error
-	PIDFromContainerID(containerID string) (int, error)
-}
-
+// TODO(kakkoyun): Find equivalent function using procfs package.
+// CRIContainerRuntime defines the interface to interact with the container runtime interfaces.
 func CgroupPathV2AddMountpoint(path string) (string, error) {
 	pathWithMountpoint := filepath.Join("/sys/fs/cgroup/unified", path)
 	if _, err := os.Stat(pathWithMountpoint); os.IsNotExist(err) {
@@ -91,6 +70,8 @@ func CgroupPathV2AddMountpoint(path string) (string, error) {
 	return pathWithMountpoint, nil
 }
 
+// TODO(kakkoyun): Find equivalent function using procfs package.
+
 // GetCgroupID returns the cgroup2 ID of a path.
 func GetCgroupID(pathWithMountpoint string) (uint64, error) {
 	cPathWithMountpoint := C.CString(pathWithMountpoint)
@@ -101,6 +82,8 @@ func GetCgroupID(pathWithMountpoint string) (uint64, error) {
 	}
 	return ret, nil
 }
+
+// TODO(kakkoyun): Find equivalent function using procfs package.
 
 // GetCgroupPaths returns the cgroup1 and cgroup2 paths of a process.
 // It does not include the "/sys/fs/cgroup/{unified,systemd,}" prefix.
@@ -152,6 +135,9 @@ func GetCgroupPaths(pid int) (string, string, error) {
 	return cgroupPathV1, cgroupPathV2, nil
 }
 
+// TODO(kakkoyun): Find equivalent function using procfs package.
+
+// GetMntNs returns the inode number of the mount namespace of a process.
 func GetMntNs(pid int) (uint64, error) {
 	fileinfo, err := os.Stat(filepath.Join("/proc", fmt.Sprintf("%d", pid), "ns/mnt"))
 	if err != nil {
@@ -162,24 +148,4 @@ func GetMntNs(pid int) (uint64, error) {
 		return 0, fmt.Errorf("not a syscall.Stat_t")
 	}
 	return stat.Ino, nil
-}
-
-func ParseOCIState(stateBuf []byte) (string, int, error) {
-	ociState := &ocispec.State{}
-	if err := json.Unmarshal(stateBuf, ociState); err != nil {
-		// Some versions of runc produce an invalid json...
-		// As a workaround, make it valid by trimming the invalid parts
-		fix := regexp.MustCompile(`(?ms)^(.*),"annotations":.*$`)
-		matches := fix.FindStringSubmatch(string(stateBuf))
-		if len(matches) != 2 {
-			err = fmt.Errorf("cannot parse OCI state: matches=%+v\n %w\n%s", matches, err, string(stateBuf))
-			return "", 0, err
-		}
-		err = json.Unmarshal([]byte(matches[1]+"}"), ociState)
-		if err != nil {
-			err = fmt.Errorf("cannot parse OCI state: %w\n%s", err, string(stateBuf))
-			return "", 0, err
-		}
-	}
-	return ociState.ID, ociState.Pid, nil
 }

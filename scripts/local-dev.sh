@@ -68,7 +68,7 @@ function up() {
             --kubernetes-version=stable \
             --cpus=2 \
             --memory=8gb \
-            --disk-size=20gb \
+            --disk-size=80gb \
             --docker-opt dns=8.8.8.8 \
             --docker-opt default-ulimit=memlock=9223372036854775807:9223372036854775807
     fi

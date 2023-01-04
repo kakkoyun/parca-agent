@@ -15,6 +15,7 @@
 package metadata
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/go-kit/log"
@@ -62,6 +63,7 @@ func ServiceDiscovery(logger log.Logger, m *discovery.Manager) Provider {
 				}
 			}
 
+			level.Debug(logger).Log("msg", "updating service discovery metadata", "state", fmt.Sprint(state))
 			provider.update(state)
 		}
 	}()

@@ -53,10 +53,10 @@ func Process() Provider {
 		}
 
 		return model.LabelSet{
-			"cgroup_name": model.LabelValue(cgroup.Path),
-			"comm":        model.LabelValue(comm),
-			"executable":  model.LabelValue(executable),
-			"ppid":        model.LabelValue(strconv.Itoa(stat.PPID)),
+			"cgroups_path": model.LabelValue(cgroup.Path),
+			"comm":       model.LabelValue(comm),
+			"executable": model.LabelValue(executable),
+			"ppid":       model.LabelValue(strconv.Itoa(stat.PPID)),
 		}, nil
 	}}
 }
