@@ -1,23 +1,24 @@
-package container
+package containers
 
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unsafe"
 
-// From discovery/kubernetes.go
-
-// type ContainerDefinition struct {
-// 	NodeName      string
-// 	ContainerID   string
-// 	CgroupPath    string
-// 	CgroupID      uint64
-// 	Mntns         uint64
-// 	Namespace     string
-// 	PodName       string
-// 	ContainerName string
-// 	PodLabels     map[string]string
-// 	CgroupV1      string
-// 	CgroupV2      string
-// 	MountSources  []string
-// 	PID           int
-// }
+	"github.com/aquasecurity/libbpfgo"
+	"github.com/aquasecurity/tracee/pkg/cgroup"
+	cruntime "github.com/aquasecurity/tracee/pkg/containers/runtime"
+	"github.com/aquasecurity/tracee/pkg/logger"
+)
 
 // Containers contains information about running containers in the host.
 type Containers struct {

@@ -18,6 +18,10 @@ import (
 	"github.com/prometheus/common/model"
 )
 
+// TODO(kakkoyun): What should this map to cgroup or container?
+// Discovery Manager resolves to a group or groups. Should we have an interface for Discovery Manager?
+// or should we have an interface between metadata package and this package using th Group?
+
 // Group is a set of targets with a common label set(production, test, staging etc.).
 type Group struct {
 	// Targets is a list of targets identified by a label set. Each target is
@@ -30,6 +34,7 @@ type Group struct {
 	// Source is an identifier that describes a group of targets.
 	Source string
 
+	// TODO(kakkoyun): Consider removing. Or changing it with container type.
 	// PIDs running in this group. This is used to match processes to other metadata.
 	PIDs []int
 }

@@ -24,6 +24,7 @@ import (
 type Provider interface {
 	Labels(pid int) (model.LabelSet, error)
 	Name() string
+	// TODO(kakkoyun): Simplify interface, by removing this method and making caching implicit.
 	ShouldCache() bool
 }
 

@@ -14,8 +14,6 @@
 
 package cpu
 
-import "C"
-
 import (
 	"bytes"
 	"encoding/binary"

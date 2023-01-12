@@ -32,6 +32,8 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
+// TODO(kakkoyun): Sync podInformer from inspektor-gadget
+
 type PodInformer struct {
 	logger log.Logger
 
@@ -42,9 +44,62 @@ type PodInformer struct {
 	stop           chan struct{}
 	createdPodChan chan *v1.Pod
 	deletedPodChan chan string
+
+	wg             sync.WaitGroup
 }
 
 func NewPodInformer(logger log.Logger, node string, clientset kubernetes.Interface, createdPodChan chan *v1.Pod, deletedPodChan chan string) (*PodInformer, error) {
+	// config, err := rest.InClusterConfig()
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// clientset, err := kubernetes.NewForConfig(config)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// podListWatcher := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "pods", "", fields.OneTermEqualSelector("spec.nodeName", node))
+
+	// // creates the queue
+	// queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+
+	// indexer, informer := cache.NewIndexerInformer(podListWatcher, &v1.Pod{}, 0, cache.ResourceEventHandlerFuncs{
+	// 	AddFunc: func(obj interface{}) {
+	// 		key, err := cache.MetaNamespaceKeyFunc(obj)
+	// 		if err == nil {
+	// 			queue.Add(key)
+	// 		}
+	// 	},
+	// 	UpdateFunc: func(old interface{}, new interface{}) {
+	// 		key, err := cache.MetaNamespaceKeyFunc(new)
+	// 		if err == nil {
+	// 			queue.Add(key)
+	// 		}
+	// 	},
+	// 	DeleteFunc: func(obj interface{}) {
+	// 		// IndexerInformer uses a delta queue, therefore for deletes we have to use this
+	// 		// key function.
+	// 		key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	// 		if err == nil {
+	// 			queue.Add(key)
+	// 		}
+	// 	},
+	// }, cache.Indexers{})
+
+	// p := &PodInformer{
+	// 	indexer:        indexer,
+	// 	queue:          queue,
+	// 	informer:       informer,
+	// 	stop:           make(chan struct{}),
+	// 	createdPodChan: make(chan *v1.Pod),
+	// 	deletedPodChan: make(chan string),
+	// }
+
+	// // Now let's start the controller
+	// go p.Run(1, p.stop)
+
+	// return p, nil
+
 	optionsModifier := func(options *metav1.ListOptions) {
 		options.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", node).String()
 	}
@@ -95,7 +150,25 @@ func NewPodInformer(logger log.Logger, node string, clientset kubernetes.Interfa
 
 func (p *PodInformer) Stop() {
 	close(p.stop)
+
+	// // tell all workers to end
+	// close(p.stop)
+
+	// // wait for workers to end before closing channels to avoid
+	// // writing to closed channels
+	// p.wg.Wait()
+
+	// close(p.createdPodChan)
+	// close(p.deletedPodChan)
 }
+
+// func (p *PodInformer) CreatedChan() <-chan *v1.Pod {
+// 	return p.createdPodChan
+// }
+
+// func (p *PodInformer) DeletedChan() <-chan string {
+// 	return p.deletedPodChan
+// }
 
 func (p *PodInformer) processNextItem() bool {
 	// Wait until there is a new item in the working queue
@@ -155,6 +228,7 @@ func (p *PodInformer) Run(threadiness int, stopCh chan struct{}) {
 	}
 
 	for i := 0; i < threadiness; i++ {
+		// p.wg.Add(1)
 		go wait.Until(p.runWorker, time.Second, stopCh)
 	}
 
@@ -163,6 +237,8 @@ func (p *PodInformer) Run(threadiness int, stopCh chan struct{}) {
 }
 
 func (p *PodInformer) runWorker() {
+	// defer p.wg.Done()
+
 	for p.processNextItem() {
 	}
 }

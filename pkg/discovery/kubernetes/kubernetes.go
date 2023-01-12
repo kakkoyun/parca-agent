@@ -208,6 +208,8 @@ func (c *Client) PodToContainers(pod *v1.Pod) []*ContainerDefinition {
 		// TODO(kakkoyun): Check validity of cgroup data.
 		cgroupPathV2WithMountpoint, _ := cgroup.CgroupPathV2AddMountpoint(cgroupPathV2)
 		cgroupID, _ := cgroup.GetCgroupID(cgroupPathV2WithMountpoint)
+
+		// TODO(kakkoyun): Remove if there's no use case for it.
 		mntns, err := cgroup.GetMntNs(pid)
 		if err != nil {
 			level.Debug(c.logger).Log("msg", "skipping pod, cannot find mnt namespace", "namespace", pod.GetNamespace(), "pod", pod.GetName(), "err", err)

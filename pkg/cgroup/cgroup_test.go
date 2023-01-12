@@ -12,7 +12,7 @@
 // limitations under the License.
 //
 
-package metadata
+package cgroup
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFindFirstCPUCgroup(t *testing.T) {
+func TestFindFirstCPU(t *testing.T) {
 	tests := []struct {
 		name      string
 		contents  string
