@@ -30,40 +30,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-
-// FindFirstCPU returns the first cgroup with cpu controller.
-func FindFirstCPU(cgroups []procfs.Cgroup) procfs.Cgroup {
-	// If only 1 cgroup, simply return it
-	if len(cgroups) == 1 {
-		return cgroups[0]
-	}
-
-	for _, cg := range cgroups {
-		// Find first cgroup v1 with cpu controller
-		for _, ctlr := range cg.Controllers {
-			if ctlr == "cpu" {
-				return cg
-			}
-		}
-
-		// Find first systemd slice
-		// https://systemd.io/CGROUP_DELEGATION/#systemds-unit-types
-		if strings.HasPrefix(cg.Path, "/system.slice/") || strings.HasPrefix(cg.Path, "/user.slice/") {
-			return cg
-		}
-
-		// FIXME: what are we looking for here?
-		// https://systemd.io/CGROUP_DELEGATION/#controller-support
-		for _, ctlr := range cg.Controllers {
-			if strings.Contains(ctlr, "systemd") {
-				return cg
-			}
-		}
-	}
-
-	return procfs.Cgroup{}
-}
-
 // TODO(kakkoyun): Convert other strings to constants.
 
 const (
@@ -234,8 +200,8 @@ func NewCgroup(ver Version) (Cgroup, error) {
 
 // TODO(kakkoyun): Add ID to cgroups?
 type CgroupV1 struct {
-	hid  int
-	path string
+	hid        int
+	path       string
 	mountpoint string
 }
 
@@ -243,14 +209,89 @@ func (c *CgroupV1) Version() Version {
 	return V1
 }
 
+func (c *CgroupV1) Path() string {
+	return c.path
+}
+
 type CgroupV2 struct {
-	hid  int
-	path string
+	hid        int
+	path       string
 	mountpoint string
 }
 
 func (c *CgroupV2) Version() Version {
 	return V2
+}
+
+func (c *CgroupV2) Path() string {
+	return c.path
+}
+
+type cgroupProcfs struct {
+	procfs.Cgroup
+}
+
+func (c *cgroupProcfs) Path() string {
+	return c.Cgroup.Path
+}
+
+func (c *cgroupProcfs) Version() Version {
+	if c.Cgroup.HierarchyID == 0 {
+		return V2
+	}
+	return V1
+}
+
+// FindFirstCPUFromPID returns the first cgroup with cpu controller.
+func FindFirstCPUFromPID(pid int) (Cgroup, error) {
+	ps, err := procfs.NewProc(pid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get proc for PID %d: %w", pid, err)
+	}
+
+	return FindFirstCPUFromProc(ps)
+}
+
+// FindFirstCPUFromProc returns the first cgroup with cpu controller.
+func FindFirstCPUFromProc(ps procfs.Proc) (Cgroup, error) {
+	cgroups, err := ps.Cgroups()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cgroups for PID %d: %w", ps.PID, err)
+	}
+
+	return &cgroupProcfs{findFirstCPU(cgroups)}, nil
+}
+
+func findFirstCPU(cgroups []procfs.Cgroup) procfs.Cgroup {
+	// If only 1 cgroup, simply return it
+	if len(cgroups) == 1 {
+		return cgroups[0]
+	}
+
+	for _, cg := range cgroups {
+		// Find first cgroup v1 with cpu controller
+		for _, ctlr := range cg.Controllers {
+			if ctlr == "cpu" {
+				return cg
+			}
+		}
+
+		// Find first systemd slice
+		// https://systemd.io/CGROUP_DELEGATION/#systemds-unit-types
+		if strings.HasPrefix(cg.Path, "/system.slice/") || strings.HasPrefix(cg.Path, "/user.slice/") {
+			return cg
+		}
+
+		// FIXME: what are we looking for here?
+		// https://systemd.io/CGROUP_DELEGATION/#controller-support
+		for _, ctlr := range cg.Controllers {
+			if strings.Contains(ctlr, "systemd") {
+				return cg
+			}
+		}
+	}
+
+	return procfs.Cgroup{}
 }
 
 func getCgroupDefaultVersion() (Version, error) {
@@ -380,8 +421,8 @@ func GetCgroupPath(rootDir string, cgroupId uint64, subPath string) (string, err
 	return "", fs.ErrNotExist
 }
 
-
 // TODO(kakkoyun): Find equivalent function using procfs package.
+// - Embed in the cgroup types!
 
 // CRIContainerRuntime defines the interface to interact with the container runtime interfaces.
 func CgroupPathV2AddMountpoint(path string) (string, error) {
@@ -394,7 +435,6 @@ func CgroupPathV2AddMountpoint(path string) (string, error) {
 	}
 	return pathWithMountpoint, nil
 }
-
 
 // TODO(kakkoyun): Find equivalent function using procfs package.
 
@@ -412,6 +452,9 @@ func GetCgroupID(pathWithMountpoint string) (uint64, error) {
 }
 
 // TODO(kakkoyun): Find equivalent function using procfs package.
+// - This should be the entry point for the cgroup package.
+// - Should return a cgroup type (interface, either v1 or v2).
+// - Caching is ok. But keep it extremely simple.
 
 // GetCgroupPaths returns the cgroup1 and cgroup2 paths of a process.
 // It does not include the "/sys/fs/cgroup/{unified,systemd,}" prefix.
@@ -462,7 +505,6 @@ func GetCgroupPaths(pid int) (string, string, error) {
 
 	return cgroupPathV1, cgroupPathV2, nil
 }
-
 
 // TODO(kakkoyun): Remove if there's no use case for it.
 

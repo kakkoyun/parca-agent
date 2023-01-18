@@ -30,12 +30,10 @@ func Process() Provider {
 			return nil, fmt.Errorf("failed to instantiate procfs for PID %d: %w", pid, err)
 		}
 
-		cgroups, err := p.Cgroups()
+		cgroup, err := cgroup.FindFirstCPUFromProc(p)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cgroups for PID %d: %w", pid, err)
+			return nil, fmt.Errorf("failed to get cgroup for PID %d: %w", pid, err)
 		}
-
-		cgroup := cgroup.FindFirstCPU(cgroups)
 
 		comm, err := p.Comm()
 		if err != nil {
@@ -53,7 +51,7 @@ func Process() Provider {
 		}
 
 		return model.LabelSet{
-			"cgroups_path": model.LabelValue(cgroup.Path),
+			"cgroups_path": model.LabelValue(cgroup.Path()),
 			"comm":         model.LabelValue(comm),
 			"executable":   model.LabelValue(executable),
 			"ppid":         model.LabelValue(strconv.Itoa(stat.PPID)),
