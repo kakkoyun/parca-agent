@@ -24,7 +24,6 @@ import (
 	"github.com/go-kit/log/level"
 	burrow "github.com/goburrow/cache"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/atomic"
 
 	"github.com/parca-dev/parca-agent/pkg/buildid"
 	"github.com/parca-dev/parca-agent/pkg/cache"
@@ -109,10 +108,9 @@ func (p *Pool) NewFile(f *os.File) (*ObjectFile, error) {
 		return nil, fmt.Errorf("failed to stat the file: %w", err)
 	}
 	obj := ObjectFile{
-		file:   f,
-		elf:    ef,
-		mtx:    &sync.RWMutex{},
-		closed: atomic.NewBool(false),
+		mtx:  &sync.Mutex{},
+		file: f,
+		elf:  ef,
 
 		BuildID: buildID,
 		Path:    filePath,

@@ -256,7 +256,6 @@ func (im *InfoManager) extractAndUploadDebuginfo(ctx context.Context, pid int, m
 			dbgObjFile, err = di.ExtractOrFindDebugInfo(ctx, m.Root(), srcObjFile)
 			if err != nil {
 				im.metrics.extractOrFind.WithLabelValues(lvFail).Inc()
-				level.Error(logger).Log("msg", "failed to find or extract debuginfo is uploaded", "err", err)
 				multiErr = multierror.Append(multiErr, err)
 				continue
 			}
@@ -270,8 +269,6 @@ func (im *InfoManager) extractAndUploadDebuginfo(ctx context.Context, pid int, m
 			defer func() {
 				im.metrics.uploadDuration.Observe(time.Since(now).Seconds())
 			}()
-
-			logger := log.With(im.logger, "buildid", srcObjFile.BuildID, "path", srcObjFile.Path)
 
 			// NOTICE: The upload timeout and upload retry logic controlled by debuginfo manager.
 			if err := di.Upload(ctx, dbgObjFile); err != nil {
