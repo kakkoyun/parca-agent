@@ -21,6 +21,7 @@ import (
 	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/procfs"
+	"github.com/stretchr/testify/require"
 
 	"github.com/parca-dev/parca-agent/pkg/objectfile"
 )
@@ -69,6 +70,7 @@ func BenchmarkKernelRelocationSymbol(b *testing.B) {
 	}
 }
 
+// @nocommit
 // TODO(kakkoyun): Convert to consume objectFile. We need a way to mock the objectFile.
 // func TestComputeBase(t *testing.T) {
 // 	tinyExecFile := &elf.File{
@@ -217,7 +219,15 @@ func TestELFObjAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mm := NewMapManager(fs, objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 50))
+	ofp := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
+	mm := NewMapManager(fs, ofp)
+
+	// Hold a reference to the object file so it doesn't get closed.
+	ref, err := ofp.Open(name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ref.Release()
+	})
 
 	for _, tc := range []struct {
 		desc                 string
@@ -258,25 +268,16 @@ func TestELFObjAddr(t *testing.T) {
 					},
 				},
 			}
-
-			if err := m.init(); err != nil {
-				t.Errorf("init got error %v, want any error=%v", err, tc.wantOpenError)
-			}
-			t.Cleanup(func() { m.close() })
-			if err != nil {
-				return
-			}
+			require.NoError(t, m.init())
 
 			got, err := m.Normalize(tc.addr)
-			if (err != nil) != tc.wantAddrError {
-				t.Errorf("ObjAddr got error %v, want any error=%v", err, tc.wantAddrError)
-			}
-			if err != nil {
+			if tc.wantAddrError {
+				require.Error(t, err)
 				return
 			}
-			if got != tc.wantObjAddr {
-				t.Errorf("got ObjAddr %x; want %x\n", got, tc.wantObjAddr)
-			}
+			require.NoError(t, err)
+
+			require.Equal(t, tc.wantObjAddr, got)
 		})
 	}
 }
@@ -309,7 +310,7 @@ func TestELFObjAddrNoPIE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mm := NewMapManager(fs, objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 50))
+	mm := NewMapManager(fs, objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0))
 
 	const (
 		mappingStart  = 0x401000
@@ -340,7 +341,6 @@ func TestELFObjAddrNoPIE(t *testing.T) {
 	if err := m.init(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { m.close() })
 
 	tests := []uint64{
 		// fibNaive func exact address.
@@ -396,7 +396,7 @@ func TestELFObjAddrPIE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mm := NewMapManager(fs, objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 50))
+	mm := NewMapManager(fs, objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0))
 
 	// The sampled program was compiled as follows:
 	// gcc -o fib main.c
@@ -429,7 +429,6 @@ func TestELFObjAddrPIE(t *testing.T) {
 	if err := m.init(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { m.close() })
 
 	tests := map[uint64]uint64{
 		// fibNaive func exact address.

@@ -34,6 +34,7 @@ const kernelMappingFileName = "[kernel.kallsyms]"
 
 type MapManager struct {
 	*procfs.FS
+
 	objFilePool *objectfile.Pool
 }
 
@@ -106,6 +107,23 @@ func KernelMapping() *Mapping {
 	}
 }
 
+type optionalAddress *uint64
+
+type computeOnce[T optionalAddress] struct {
+	once sync.Once
+	do   func(uint64) (T, error)
+
+	val T
+	err error
+}
+
+func (o *computeOnce[T]) Compute(addr uint64) (T, error) {
+	o.once.Do(func() {
+		o.val, o.err = o.do(addr)
+	})
+	return o.val, o.err
+}
+
 type Mapping struct {
 	mm *MapManager
 
@@ -113,15 +131,15 @@ type Mapping struct {
 
 	// Offset of kernel relocation symbol.
 	// Only defined for kernel images, nil otherwise. e. g. _stext.
+	//
+	// TODO: Remove or add InitOnce
 	kernelOffset *uint64
 
 	// Ensures the base, baseErr are computed once.
-	baseOnce sync.Once
-	base     uint64
-	baseErr  error
+	base *computeOnce[optionalAddress]
 
 	// If mappping has executable and symbolizable.
-	objFile *objectfile.ObjectFile
+	objectFileInfo *objectfile.Info
 
 	// Process related fields.
 	pid int
@@ -138,25 +156,26 @@ func (m *Mapping) init() error {
 		return errors.New("not a symbolizable mapping")
 	}
 
-	objFile, err := m.mm.objFilePool.Open(m.fullPath())
+	ref, err := m.mm.objFilePool.Open(m.fullPath())
 	if err != nil {
 		return fmt.Errorf("failed to open mapped object file: %w", err)
 	}
-	m.objFile = objFile
 
-	if err := m.computeKernelOffset(); err != nil {
+	m.base = &computeOnce[optionalAddress]{
+		do: func(addr uint64) (optionalAddress, error) {
+			// @nocommit
+			defer ref.MustRelease()
+
+			return computeBase(*m, ref, addr)
+		},
+	}
+
+	m.objectFileInfo = ref.Value().Info()
+
+	if err := m.computeKernelOffset(ref); err != nil {
 		return err
 	}
 	return nil
-}
-
-// close closes the mapped file.
-// only needed for tests, in normal use the file's life-cycle is managed by the pool.
-func (m *Mapping) close() error {
-	if m.objFile == nil {
-		return nil
-	}
-	return m.objFile.Close()
 }
 
 // IsExecutable returns true if the mapping is executable.
@@ -181,6 +200,22 @@ func (m *Mapping) Root() string {
 	return path.Join("/proc", strconv.Itoa(m.pid), "/root")
 }
 
+func (m *Mapping) ObjectFile() (objectfile.Reference, error) {
+	if !m.isSymbolizable() {
+		return nil, errors.New("not a symbolizable mapping")
+	}
+
+	// @nocommit: Add metrics.
+	if i := m.objectFileInfo; i != nil && i.BuildID != "" {
+		ref, err := m.mm.objFilePool.Get(m.objectFileInfo.BuildID)
+		if err == nil {
+			return ref, nil
+		}
+	}
+
+	return m.mm.objFilePool.Open(m.fullPath())
+}
+
 // fullPath returns path relative to the root namespace of the system.
 func (m *Mapping) fullPath() string {
 	return path.Join("/proc", strconv.Itoa(m.pid), "/root", m.Pathname)
@@ -198,14 +233,26 @@ func kernelRelocationSymbol(mappingFile string) string {
 }
 
 // computeKernelOffset computes the offset of the kernel relocation symbol.
-func (m *Mapping) computeKernelOffset() error {
+func (m *Mapping) computeKernelOffset(ref objectfile.Reference) error {
+	if m.kernelOffset != nil {
+		return nil
+	}
+
+	// @nocommit
+	// ref, err = ref.Clone()
+	// if err != nil {
+	// 	return err
+	// }
+	ref = ref.MustClone()
+	defer ref.MustRelease()
+
 	var (
 		relocationSymbol = kernelRelocationSymbol(m.fullPath())
 		kernelOffset     *uint64
 		pageAligned      = func(addr uint64) bool { return addr%4096 == 0 }
 	)
 
-	ef, err := m.objFile.ELF()
+	ef, err := ref.Value().ELF()
 	if err != nil {
 		return fmt.Errorf("failed to get ELF file: %w", err)
 	}
@@ -308,24 +355,26 @@ func (m *Mapping) Normalize(addr uint64) (uint64, error) {
 	if addr < uint64(m.StartAddr) || addr >= uint64(m.EndAddr) {
 		return 0, fmt.Errorf("specified address %x is outside the mapping range [%x, %x] for ObjectFile %q", addr, m.StartAddr, m.EndAddr, m.fullPath())
 	}
-	m.baseOnce.Do(func() { m.baseErr = m.computeBase(addr) })
-	if m.baseErr != nil {
-		return 0, m.baseErr
+
+	base, err := m.base.Compute(addr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get base for %q: %w", m.Pathname, err)
 	}
-	return addr - m.base, nil
+	return addr - *base, nil
 }
 
 // computeBase computes the relocation base for the given binary ObjectFile only if
 // the mapping field is set. It populates the base fields returns an error.
-func (m *Mapping) computeBase(addr uint64) error {
-	ef, err := m.objFile.ELF()
+func computeBase(m Mapping, ref objectfile.Reference, addr uint64) (*uint64, error) {
+	objFile := ref.Value()
+	ef, err := objFile.ELF()
 	if err != nil {
-		return fmt.Errorf("failed to create ELF file for ObjectFile %q: %w", m.objFile.Path, err)
+		return nil, fmt.Errorf("failed to create ELF file for ObjectFile %q: %w", objFile.Info().Path, err)
 	}
 
 	ph, err := m.findProgramHeader(ef, addr)
 	if err != nil {
-		return fmt.Errorf("failed to find program header for ObjectFile %q, ELF mapping %#v, address %x: %w", m.objFile.Path, m, addr, err)
+		return nil, fmt.Errorf("failed to find program header for ObjectFile %q, ELF mapping %#v, address %x: %w", objFile.Info().Path, m, addr, err)
 	}
 
 	base, err := elfexec.GetBase(
@@ -333,10 +382,9 @@ func (m *Mapping) computeBase(addr uint64) error {
 		uint64(m.StartAddr), uint64(m.EndAddr), uint64(m.Offset),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	m.base = base
-	return nil
+	return &base, nil
 }
 
 // ConvertToPprof converts the Mapping to a pprof profile.Mapping.
@@ -345,9 +393,9 @@ func (m *Mapping) ConvertToPprof() *profile.Mapping {
 	// TODO: Maybe add detection for JITs that use files.
 	path := "jit"
 
-	if m.objFile != nil {
-		buildID = m.objFile.BuildID
-		path = m.objFile.Path
+	if i := m.objectFileInfo; i != nil {
+		buildID = i.BuildID
+		path = i.Path
 	}
 
 	if m.pprof != nil {

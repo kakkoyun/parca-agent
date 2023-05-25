@@ -33,8 +33,8 @@ import (
 )
 
 type DebuginfoManager interface {
-	ExtractOrFindDebugInfo(context.Context, string, *objectfile.ObjectFile) (*objectfile.ObjectFile, error)
-	Upload(context.Context, *objectfile.ObjectFile) error
+	ExtractOrFindDebugInfo(context.Context, string, objectfile.Reference) (objectfile.Reference, error)
+	Upload(context.Context, objectfile.Reference) error
 	Close() error
 }
 
@@ -118,8 +118,6 @@ type InfoManager struct {
 	cache burrow.Cache
 	sfg   *singleflight.Group // for loader.
 
-	debuginfoSrcCache burrow.Cache // for debuginfo files.
-
 	mapManager       *MapManager
 	debuginfoManager DebuginfoManager
 	labelManager     LabelManager
@@ -133,11 +131,6 @@ func NewInfoManager(logger log.Logger, reg prometheus.Registerer, mm *MapManager
 			burrow.WithMaximumSize(5000),
 			burrow.WithExpireAfterAccess(10*profilingDuration),
 			burrow.WithStatsCounter(cache.NewBurrowStatsCounter(logger, reg, "process_info")),
-		),
-		debuginfoSrcCache: burrow.New(
-			burrow.WithMaximumSize(50_000),
-			burrow.WithExpireAfterAccess(10*profilingDuration),
-			burrow.WithStatsCounter(cache.NewBurrowStatsCounter(logger, reg, "debuginfo_source")),
 		),
 		mapManager:       mm,
 		debuginfoManager: dim,
@@ -228,59 +221,82 @@ func (im *InfoManager) extractAndUploadDebuginfo(ctx context.Context, pid int, m
 			continue
 		}
 
-		var (
-			srcObjFile = m.objFile // objectfile should exist and be open at this point.
-			logger     = log.With(im.logger, "pid", pid, "buildid", srcObjFile.BuildID, "path", srcObjFile.Path)
+		// @nocommit
+		level.Debug(im.logger).Log("msg", "extracting debug information", "pid", pid, "path", m.Pathname, "owner", "KEMAL")
+		src, err := m.ObjectFile()
+		if err != nil {
+			multiErr = multierror.Append(multiErr, err)
+			continue
+		}
+		defer src.Release()
 
-			now        = time.Now()
-			dbgObjFile *objectfile.ObjectFile
-			err        error
+		var (
+			srcFile = src.Value()
+			srcInfo = srcFile.Info()
+			logger  = log.With(im.logger, "pid", pid, "buildid", srcInfo.BuildID, "path", srcInfo.Path)
+
+			now = time.Now()
 		)
 
 		// If the debuginfo file is already extracted or found, we do not need to do it again.
 		// We just need to make sure it is uploaded.
-		val, ok := im.debuginfoSrcCache.GetIfPresent(srcObjFile.BuildID)
-		if ok {
-			cachedObjFile, ok := val.(objectfile.ObjectFile)
-			if !ok {
-				return fmt.Errorf("unexpected type in cache: %T", val)
-			}
-			dbgObjFile = &cachedObjFile
+		var dbg objectfile.Reference
+		if srcInfo.DebugFile != nil {
+			// @nocommit
+			dbg = srcInfo.DebugFile.MustClone()
+			// For the files we cached here, we may need to implement a re-open mechanism.
+			level.Debug(logger).Log("msg", "debuginfo file is already extracted or found, using cache", "owner", "KEMAL")
 		} else {
+			// objectfile should exist and be open at this point.
+			src, err := m.ObjectFile()
+			if err != nil {
+				return fmt.Errorf("failed to get a reference for object file: %w", err)
+			}
+			// @nocommit
+			defer src.MustRelease()
+
 			// We upload the debug information files asynchronous and concurrently with retry.
 			// However, first we need to find the debuginfo file or extract debuginfo from the executable.
 			// For the short-lived processes, we may not complete the operation before the process exits.
 			// Therefore, to be able shorten this window as much as possible, we extract and find the debuginfo
 			// files synchronously and upload them asynchronously.
 			// We still might be too slow to obtain the necessary file descriptors for certain short-lived processes.
-			dbgObjFile, err = di.ExtractOrFindDebugInfo(ctx, m.Root(), srcObjFile)
+			dbg, err = di.ExtractOrFindDebugInfo(ctx, m.Root(), src)
 			if err != nil {
+				// @nocommit
+				// src.MustRelease()
 				im.metrics.extractOrFind.WithLabelValues(lvFail).Inc()
 				multiErr = multierror.Append(multiErr, err)
 				continue
 			}
-			im.debuginfoSrcCache.Put(srcObjFile.BuildID, *dbgObjFile)
+			// @nocommit
+			// src.MustRelease()
+			level.Debug(logger).Log("msg", "debuginfo file is extracted or found", "owner", "KEMAL")
+			srcFile.Info().DebugFile = dbg.MustClone()
+
 			im.metrics.extractOrFind.WithLabelValues(lvSuccess).Inc()
 			im.metrics.extractOrFindDuration.Observe(time.Since(now).Seconds())
 		}
 
-		go func() {
+		go func(dbg objectfile.Reference) {
+			defer dbg.MustRelease()
+			// if err := dbgObjFile.Release(); err != nil {
+			// 	level.Debug(logger).Log("msg", "failed to close objfile", "err", err)
+			// }
+
 			now := time.Now()
 			defer func() {
 				im.metrics.uploadDuration.Observe(time.Since(now).Seconds())
 			}()
 
 			// NOTICE: The upload timeout and upload retry logic controlled by debuginfo manager.
-			if err := di.Upload(ctx, dbgObjFile); err != nil {
+			if err := di.Upload(ctx, dbg); err != nil {
 				im.metrics.upload.WithLabelValues(lvFail).Inc()
 				level.Error(logger).Log("msg", "failed to upload debuginfo", "err", err)
 				return
 			}
 			im.metrics.upload.WithLabelValues(lvSuccess).Inc()
-			if err := srcObjFile.Close(); err != nil {
-				level.Debug(logger).Log("msg", "failed to close objfile", "err", err)
-			}
-		}()
+		}(dbg)
 	}
 	return multiErr.ErrorOrNil()
 }

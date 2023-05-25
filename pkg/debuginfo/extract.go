@@ -77,10 +77,8 @@ func (e *Extractor) ExtractAll(ctx context.Context, srcDsts map[string]io.WriteS
 // Extract extracts debug information from the given executable.
 // Cleaning up the temporary directory and the interim file is the caller's responsibility.
 func Extract(ctx context.Context, dst io.WriteSeeker, src SeekReaderAt) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	w, err := elfwriter.NewFromSource(dst, src)

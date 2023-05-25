@@ -88,19 +88,24 @@ func TestFinderWithFakeFS_find(t *testing.T) {
 				cache:     fakeCache{},
 				debugDirs: defaultDebugDirs,
 			}
-			objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 5)
+			objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
 			t.Cleanup(func() {
 				objFilePool.Close()
 			})
-			var objFile *objectfile.ObjectFile
+			var ref objectfile.Reference
+			t.Cleanup(func() {
+				if ref != nil {
+					ref.MustRelease()
+				}
+			})
 			var err error
 			if tt.args.path != "" {
 				// Content does not matter.
-				objFile, err = objFilePool.NewFile(mockObjectFile)
+				ref, err = objFilePool.NewFile(mockObjectFile)
 				require.NoError(t, err)
 			}
 
-			got, err := f.find(tt.args.root, objFile)
+			got, err := f.find(tt.args.root, ref)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("find() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -111,6 +116,10 @@ func TestFinderWithFakeFS_find(t *testing.T) {
 }
 
 func TestFinder_find(t *testing.T) {
+	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 2)
+	t.Cleanup(func() {
+		objFilePool.Close()
+	})
 	type args struct {
 		root    string
 		buildID string
@@ -149,10 +158,6 @@ func TestFinder_find(t *testing.T) {
 				cache:     fakeCache{},
 				debugDirs: defaultDebugDirs,
 			}
-			objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 5)
-			t.Cleanup(func() {
-				objFilePool.Close()
-			})
 			objFile, err := objFilePool.Open(tt.args.path)
 			require.NoError(t, err)
 

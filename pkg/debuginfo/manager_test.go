@@ -17,6 +17,7 @@ package debuginfo
 import (
 	"bytes"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ import (
 
 func BenchmarkUploadInitiateUploadError(b *testing.B) {
 	name := filepath.Join("../../internal/pprof/binutils/testdata", "exe_linux_64")
-	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 1024)
+	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
 	b.Cleanup(func() {
 		objFilePool.Close()
 	})
@@ -86,7 +87,7 @@ func BenchmarkUploadInitiateUploadError(b *testing.B) {
 
 func TestUpload(t *testing.T) {
 	name := filepath.Join("../../internal/pprof/binutils/testdata", "exe_linux_64")
-	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 1024)
+	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
 	t.Cleanup(func() {
 		objFilePool.Close()
 	})
@@ -133,7 +134,7 @@ func TestUpload(t *testing.T) {
 			return &debuginfopb.InitiateUploadResponse{
 				UploadInstructions: &debuginfopb.UploadInstructions{
 					UploadId:       "upload-id",
-					BuildId:        dbgFile.BuildID,
+					BuildId:        dbgFile.Value().Info().BuildID,
 					UploadStrategy: debuginfopb.UploadInstructions_UPLOAD_STRATEGY_SIGNED_URL,
 					SignedUrl:      testServer.URL,
 				},
@@ -214,7 +215,7 @@ func TestUpload(t *testing.T) {
 
 func TestUploadSingleFlight(t *testing.T) {
 	name := filepath.Join("../../internal/pprof/binutils/testdata", "exe_linux_64")
-	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 1024)
+	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
 	t.Cleanup(func() {
 		objFilePool.Close()
 	})
@@ -251,7 +252,7 @@ func TestUploadSingleFlight(t *testing.T) {
 			return &debuginfopb.InitiateUploadResponse{
 				UploadInstructions: &debuginfopb.UploadInstructions{
 					UploadId:       "upload-id",
-					BuildId:        dbgFile.BuildID,
+					BuildId:        dbgFile.Value().Info().BuildID,
 					UploadStrategy: debuginfopb.UploadInstructions_UPLOAD_STRATEGY_SIGNED_URL,
 					SignedUrl:      testServer.URL,
 				},
@@ -320,26 +321,61 @@ func TestDisableStripping(t *testing.T) {
 		stripDebuginfos: false,
 		tempDir:         os.TempDir(),
 	}
-	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 5)
-	t.Cleanup(func() {
-		objFilePool.Close()
-	})
-	objFile, err := objFilePool.Open(file)
+	objFilePool := objectfile.NewPool(log.NewNopLogger(), prometheus.NewRegistry(), 0)
+
+	objFileRef, err := objFilePool.Open(file)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, objFileRef.Release())
+	})
 
 	// buildid: "test"
-	f, err := m.extractDebuginfo(context.Background(), objFile)
-	require.NoError(t, err)
-
-	r, done, err := f.Reader()
+	ref, err := m.extractDebuginfo(context.Background(), objFileRef)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		done()
+		require.NoError(t, ref.Release())
+	})
+
+	r, release, err := ref.Value().Reader()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, release())
 	})
 	strippedContent, err := io.ReadAll(r)
 	require.NoError(t, err)
 
 	if !bytes.Equal(originalContent, strippedContent) {
 		t.Fatal("stripped file content is not equal to original file content")
+	}
+}
+
+func TestHasTextSection(t *testing.T) {
+	testCases := []struct {
+		name              string
+		filepath          string
+		textSectionExists bool
+	}{
+		{
+			name:              "text section present",
+			filepath:          "./testdata/readelf-sections",
+			textSectionExists: true,
+		},
+		{
+			name:              "text section absent",
+			filepath:          "./testdata/elf-file-without-text-section",
+			textSectionExists: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ef, err := elf.Open(tc.filepath)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				ef.Close()
+			})
+
+			require.Equal(t, tc.textSectionExists, hasTextSection(ef))
+		})
 	}
 }

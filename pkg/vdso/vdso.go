@@ -40,26 +40,27 @@ func NewCache(objFilePool *objectfile.Pool) (*Cache, error) {
 		return nil, err
 	}
 	var (
-		objFile *objectfile.ObjectFile
-		merr    error
-		path    string
+		ref  objectfile.Reference
+		merr error
+		path string
 	)
 	// This file is not present on all systems. It's an optimization.
 	for _, vdso := range []string{"vdso.so", "vdso64.so"} {
 		path = fmt.Sprintf("/usr/lib/modules/%s/vdso/%s", kernelVersion, vdso)
-		objFile, err = objFilePool.Open(path)
+		ref, err = objFilePool.Open(path)
 		if err != nil {
 			merr = multierr.Append(merr, fmt.Errorf("failed to open elf file:%s, err:%w", path, err))
 			continue
 		}
 		break
 	}
-	if objFile == nil {
+	if ref == nil {
 		return nil, merr
 	}
-	defer objFile.Close()
+	// @nocommit
+	defer ref.MustRelease()
 
-	ef, err := objFile.ELF()
+	ef, err := ref.Value().ELF()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get elf file:%s, err:%w", path, err)
 	}

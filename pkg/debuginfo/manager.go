@@ -17,6 +17,7 @@ package debuginfo
 import (
 	"bufio"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"io"
@@ -40,8 +41,6 @@ import (
 	"github.com/parca-dev/parca-agent/pkg/objectfile"
 )
 
-var errNotFound = errors.New("not found")
-
 // Manager is a mechanism for extracting or finding the relevant debug information for the discovered executables.
 type Manager struct {
 	logger      log.Logger
@@ -52,17 +51,17 @@ type Manager struct {
 	stripDebuginfos bool
 	tempDir         string
 
-	// hashCacheKey is used as cache key for all the caches below.
-	// hashCache caches ELF hashes.
-	hashCache burrow.Cache
-
-	uploadTaskTokens *semaphore.Weighted
-
 	// If requested buildID is not in the cache, we do NOT initiate an upload request to the server.
 	shouldInitiateUploadResponseCache burrow.Cache
 	// Makes sure we do not try to upload the same buildID simultaneously.
 	uploadSingleflight    *singleflight.Group
 	uploadTimeoutDuration time.Duration
+	uploadTaskTokens      *semaphore.Weighted
+
+	// hashCacheKey is used as cache key for all the caches below.
+	// hashCache caches ELF hashes.
+	hashCache           burrow.Cache
+	extractSingleflight *singleflight.Group
 
 	*Extractor
 	*Finder
@@ -113,7 +112,8 @@ func New(
 		uploadTimeoutDuration:             uploadTimeout,
 		uploadTaskTokens:                  semaphore.NewWeighted(int64(uploadMaxParallel)),
 
-		hashCache: hashCache,
+		hashCache:           hashCache,
+		extractSingleflight: &singleflight.Group{},
 
 		Finder:    NewFinder(logger, reg, debugDirs),
 		Extractor: NewExtractor(logger),
@@ -130,12 +130,16 @@ type hashCacheKey struct {
 
 // ExtractOrFindDebugInfo extracts or finds the debug information for the given object file.
 // And sets the debuginfo file pointer to the debuginfo object file.
-func (di *Manager) ExtractOrFindDebugInfo(ctx context.Context, root string, srcFile *objectfile.ObjectFile) (*objectfile.ObjectFile, error) {
+func (di *Manager) ExtractOrFindDebugInfo(ctx context.Context, root string, src objectfile.Reference) (objectfile.Reference, error) {
+	// @nocommit
+	src = src.MustClone()
+	defer src.MustRelease()
+
 	// First, check whether debuginfos have been installed separately,
 	// typically in /usr/lib/debug, so we try to discover if there is a debuginfo file,
 	// that has the same build ID as the object.
 	now := time.Now()
-	dbgInfoPath, err := di.Find(ctx, root, srcFile)
+	dbgInfoPath, err := di.Find(ctx, root, src)
 	if err == nil && dbgInfoPath != "" {
 		di.metrics.find.WithLabelValues(lvSuccess).Inc()
 		di.metrics.findDuration.Observe(time.Since(now).Seconds())
@@ -149,7 +153,7 @@ func (di *Manager) ExtractOrFindDebugInfo(ctx context.Context, root string, srcF
 	}
 
 	// If we didn't find an external debuginfo file, we continue with striping to create one.
-	dbgInfoFile, err := di.extractDebuginfo(ctx, srcFile)
+	dbgInfoFile, err := di.extractDebuginfo(ctx, src)
 	if err != nil {
 		return nil, fmt.Errorf("failed to strip debuginfo: %w", err)
 	}
@@ -164,81 +168,112 @@ func (di *Manager) Close() error {
 	return err
 }
 
-func (di *Manager) extractDebuginfo(ctx context.Context, src *objectfile.ObjectFile) (*objectfile.ObjectFile, error) {
+func (di *Manager) extractDebuginfo(ctx context.Context, src objectfile.Reference) (objectfile.Reference, error) {
+	// @nocommit
+	src = src.MustClone()
+	defer src.MustRelease()
+
 	var (
-		buildID              = src.BuildID
-		binaryHasTextSection = src.HasTextSection()
-		debuginfoFile        *objectfile.ObjectFile
+		srcFile = src.Value()
+		srcInfo = srcFile.Info()
+		buildID = srcInfo.BuildID
 	)
+
+	ef, err := srcFile.ELF()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ELF file: %w", err)
+	}
+	binaryHasTextSection := hasTextSection(ef)
 
 	// Only strip the `.text` section if it's present *and* stripping is enabled.
 	if di.stripDebuginfos && binaryHasTextSection {
-		now := time.Now()
+		dbg, err, _ := di.extractSingleflight.Do(buildID, func() (interface{}, error) {
+			return di.extract(ctx, buildID, src)
+		})
+		return dbg.(objectfile.Reference), err
+	} else {
+		// @nocommit
+		return src.MustClone(), nil
+	}
+}
 
-		if err := os.MkdirAll(di.tempDir, 0o755); err != nil {
-			return nil, fmt.Errorf("failed to create temp dir: %w", err)
-		}
-		f, err := os.CreateTemp(di.tempDir, buildID)
-		if err != nil {
-			di.metrics.extract.WithLabelValues(lvFail).Inc()
-			return nil, fmt.Errorf("failed to create temp file: %w", err)
-		}
-		// This works because CreateTemp opened a file descriptor and linux keeps a reference count to open
-		// files and won't delete them until the ref count is zero.
-		defer os.Remove(f.Name())
+func (di *Manager) extract(ctx context.Context, buildID string, src objectfile.Reference) (objectfile.Reference, error) {
+	src = src.MustClone()
+	defer src.MustRelease()
 
-		r, done, err := src.Reader()
-		if err != nil {
-			di.metrics.extract.WithLabelValues(lvFail).Inc()
-			return nil, fmt.Errorf("failed to obtain reader for object file: %w", err)
-		}
+	now := time.Now()
 
-		if err := Extract(ctx, f, r); err != nil {
-			di.metrics.extract.WithLabelValues(lvFail).Inc()
-			if err := done(); err != nil {
-				return nil, fmt.Errorf("failed to reporting done: %w", err)
-			}
-			return nil, fmt.Errorf("failed to extract debug information: %w", err)
-		}
-		if err := done(); err != nil {
+	if err := os.MkdirAll(di.tempDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	f, err := os.CreateTemp(di.tempDir, buildID)
+	if err != nil {
+		di.metrics.extract.WithLabelValues(lvFail).Inc()
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	// This works because CreateTemp opened a file descriptor and linux keeps a reference count to open
+	// files and won't delete them until the ref count is zero.
+	defer os.Remove(f.Name())
+
+	r, release, err := src.Value().Reader()
+	if err != nil {
+		di.metrics.extract.WithLabelValues(lvFail).Inc()
+		return nil, fmt.Errorf("failed to obtain reader for object file: %w", err)
+	}
+
+	if err := Extract(ctx, f, r); err != nil {
+		di.metrics.extract.WithLabelValues(lvFail).Inc()
+		if err := release(); err != nil {
 			return nil, fmt.Errorf("failed to reporting done: %w", err)
 		}
-
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			di.metrics.extract.WithLabelValues(lvFail).Inc()
-			return nil, fmt.Errorf("failed to seek to the beginning of the file: %w", err)
-		}
-
-		// Try to open the file to make sure it's valid.
-		debuginfoFile, err = di.objFilePool.NewFile(f)
-		if err != nil {
-			di.metrics.extract.WithLabelValues(lvFail).Inc()
-			return nil, fmt.Errorf("failed to open debuginfo file: %w", err)
-		}
-
-		di.metrics.extract.WithLabelValues(lvSuccess).Inc()
-		di.metrics.extractDuration.Observe(time.Since(now).Seconds())
-	} else {
-		debuginfoFile = src
+		return nil, fmt.Errorf("failed to extract debug information: %w", err)
 	}
+	if err := release(); err != nil {
+		return nil, fmt.Errorf("failed to reporting done: %w", err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		di.metrics.extract.WithLabelValues(lvFail).Inc()
+		return nil, fmt.Errorf("failed to seek to the beginning of the file: %w", err)
+	}
+
+	// Try to open the file to make sure it's valid.
+	debuginfoFile, err := di.objFilePool.NewFile(f)
+	if err != nil {
+		di.metrics.extract.WithLabelValues(lvFail).Inc()
+		return nil, fmt.Errorf("failed to open debuginfo file: %w", err)
+	}
+
+	di.metrics.extract.WithLabelValues(lvSuccess).Inc()
+	di.metrics.extractDuration.Observe(time.Since(now).Seconds())
 
 	return debuginfoFile, nil
 }
 
-func (di *Manager) Upload(ctx context.Context, dbgFile *objectfile.ObjectFile) error {
+func (di *Manager) Upload(ctx context.Context, ref objectfile.Reference) error {
+	// @nocommit
+	ref = ref.MustClone()
+	defer ref.MustRelease()
+
 	di.metrics.uploadRequests.Inc()
 
 	ctx, cancel := context.WithTimeout(ctx, di.uploadTimeoutDuration)
 	defer cancel()
 
 	var (
-		buildID = dbgFile.BuildID
-		logger  = log.With(di.logger, "buildid", dbgFile.BuildID, "path", dbgFile.Path)
+		dbgFile     = ref.Value()
+		dbgFileInfo = dbgFile.Info()
+		buildID     = dbgFileInfo.BuildID
+		logger      = log.With(di.logger, "buildid", dbgFileInfo.BuildID, "path", dbgFileInfo.Path)
 	)
 
 	errCh := make(chan error)
 	go func() {
 		defer close(errCh)
+
+		// @nocommit
+		ref = ref.MustClone()
+		defer ref.MustRelease()
 
 		now := time.Now()
 		// Acquire a token to limit the number of concurrent uploads.
@@ -259,7 +294,7 @@ func (di *Manager) Upload(ctx context.Context, dbgFile *objectfile.ObjectFile) e
 		now = time.Now()
 		// The singleflight group prevents uploading the same buildID concurrently.
 		_, err, shared := di.uploadSingleflight.Do(buildID, func() (interface{}, error) {
-			return nil, di.upload(ctx, dbgFile)
+			return nil, di.upload(ctx, ref)
 		})
 		if shared {
 			di.metrics.upload.WithLabelValues(lvShared).Inc()
@@ -278,9 +313,18 @@ func (di *Manager) Upload(ctx context.Context, dbgFile *objectfile.ObjectFile) e
 	return <-errCh
 }
 
-func (di *Manager) upload(ctx context.Context, dbgFile *objectfile.ObjectFile) error {
-	buildID := dbgFile.BuildID
-	if shouldInitiateUpload := di.shouldInitiateUpload(ctx, buildID, dbgFile.Path); !shouldInitiateUpload {
+func (di *Manager) upload(ctx context.Context, ref objectfile.Reference) error {
+	// @nocommit
+	ref = ref.MustClone()
+	defer ref.MustRelease()
+
+	var (
+		dbgFile     = ref.Value()
+		dbgFileInfo = dbgFile.Info()
+		buildID     = dbgFileInfo.BuildID
+	)
+
+	if shouldInitiateUpload := di.shouldInitiateUpload(ctx, buildID, dbgFileInfo.Path); !shouldInitiateUpload {
 		return nil
 	}
 
@@ -290,28 +334,28 @@ func (di *Manager) upload(ctx context.Context, dbgFile *objectfile.ObjectFile) e
 		// and getting to the same result again.
 		key = hashCacheKey{
 			buildID: buildID,
-			modtime: dbgFile.Modtime.Unix(),
+			modtime: dbgFileInfo.Modtime.Unix(),
 		}
-		size = dbgFile.Size
+		size = dbgFileInfo.Size
 		h    string
 		err  error
 	)
 	if v, ok := di.hashCache.GetIfPresent(key); ok {
 		h = v.(string) //nolint:forcetypeassert
 	} else {
-		r, done, err := dbgFile.Reader()
+		r, release, err := dbgFile.Reader()
 		if err != nil {
 			return fmt.Errorf("failed to obtain reader for object file: %w", err)
 		}
 
 		h, err = hash.Reader(r)
 		if err != nil {
-			if err := done(); err != nil {
+			if err := release(); err != nil {
 				return fmt.Errorf("failed to reporting done: %w", err)
 			}
 			return fmt.Errorf("hash debuginfos: %w", err)
 		}
-		if err := done(); err != nil {
+		if err := release(); err != nil {
 			return fmt.Errorf("failed to reporting done: %w", err)
 		}
 		di.hashCache.Put(key, h)
@@ -332,19 +376,19 @@ func (di *Manager) upload(ctx context.Context, dbgFile *objectfile.ObjectFile) e
 		return fmt.Errorf("initiate upload: %w", err)
 	}
 
-	r, done, err := dbgFile.Reader()
+	r, release, err := dbgFile.Reader()
 	if err != nil {
 		return fmt.Errorf("failed to obtain reader for object file: %w", err)
 	}
 
 	// If we found a debuginfo file, either in file or on the system, we upload it to the server.
 	if err := di.uploadFile(ctx, initiateResp.UploadInstructions, r, size); err != nil {
-		if err := done(); err != nil {
+		if err := release(); err != nil {
 			return fmt.Errorf("failed to reporting done: %w", err)
 		}
 		return fmt.Errorf("upload debuginfo: %w", err)
 	}
-	if err := done(); err != nil {
+	if err := release(); err != nil {
 		return fmt.Errorf("failed to reporting done: %w", err)
 	}
 
@@ -427,4 +471,12 @@ func uploadViaSignedURL(ctx context.Context, url string, r io.Reader, size int64
 	}
 
 	return nil
+}
+
+// hasTextSection returns true if the ELF file has a .text section.
+func hasTextSection(ef *elf.File) bool {
+	if textSection := ef.Section(".text"); textSection == nil {
+		return false
+	}
+	return true
 }

@@ -67,14 +67,16 @@ func (f *Finder) Close() error {
 }
 
 // Find finds the separate debug file for the given object file.
-func (f *Finder) Find(ctx context.Context, root string, objFile *objectfile.ObjectFile) (string, error) {
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	default:
+func (f *Finder) Find(ctx context.Context, root string, objFileRef objectfile.Reference) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 
-	buildID := objFile.BuildID
+	// @nocommit
+	ref := objFileRef.MustClone()
+	defer ref.MustRelease()
+
+	buildID := objFileRef.Value().Info().BuildID
 	if val, ok := f.cache.GetIfPresent(buildID); ok {
 		switch v := val.(type) {
 		case string:
@@ -82,17 +84,18 @@ func (f *Finder) Find(ctx context.Context, root string, objFile *objectfile.Obje
 		case error:
 			return "", v
 		default:
-			// We didn't put you there?!
 			return "", fmt.Errorf("unexpected type in cache: %T", val)
 		}
 	}
 
-	file, err := f.find(root, objFile)
+	file, err := f.find(root, objFileRef)
 	if err != nil {
-		if errors.Is(err, errNotFound) {
+		if errors.Is(err, os.ErrNotExist) {
 			f.cache.Put(buildID, err)
 			return "", err
 		}
+		// Return the error without caching it.
+		return "", err
 	}
 
 	f.cache.Put(buildID, file)
@@ -101,11 +104,14 @@ func (f *Finder) Find(ctx context.Context, root string, objFile *objectfile.Obje
 
 var errSectionNotFound = errors.New("section not found")
 
-func (f *Finder) find(root string, objFile *objectfile.ObjectFile) (string, error) {
-	if objFile == nil {
+func (f *Finder) find(root string, ref objectfile.Reference) (string, error) {
+	if ref == nil {
 		return "", errors.New("object file is nil")
 	}
-	if len(objFile.BuildID) < 2 {
+
+	objFile := ref.Value()
+	info := objFile.Info()
+	if len(info.BuildID) < 2 {
 		return "", errors.New("invalid build ID")
 	}
 
@@ -149,7 +155,7 @@ func (f *Finder) find(root string, objFile *objectfile.ObjectFile) (string, erro
 		}
 	}
 
-	files := f.generatePaths(root, objFile.BuildID, objFile.Path, base)
+	files := f.generatePaths(root, info.BuildID, info.Path, base)
 	if len(files) == 0 {
 		return "", errors.New("failed to generate paths")
 	}
@@ -167,7 +173,7 @@ func (f *Finder) find(root string, objFile *objectfile.ObjectFile) (string, erro
 	}
 
 	if found == "" {
-		return "", errNotFound
+		return "", os.ErrNotExist
 	}
 
 	if strings.Contains(found, ".build-id") || strings.HasSuffix(found, "/debuginfo") || crc <= 0 {
@@ -183,7 +189,7 @@ func (f *Finder) find(root string, objFile *objectfile.ObjectFile) (string, erro
 		return found, nil
 	}
 
-	return "", errNotFound
+	return "", os.ErrNotExist
 }
 
 func readDebuglink(ef *elf.File) (string, uint32, error) {

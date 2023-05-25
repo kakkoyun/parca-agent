@@ -15,10 +15,12 @@
 package objectfile
 
 import (
+	"debug/elf"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -27,26 +29,55 @@ import (
 
 	"github.com/parca-dev/parca-agent/pkg/buildid"
 	"github.com/parca-dev/parca-agent/pkg/cache"
+	"github.com/parca-dev/parca-agent/pkg/rc"
 )
+
+// Only used as return type for convenience.
+type (
+	Reference = *rc.Reference[ObjectFile]
+	reference = rc.Reference[ObjectFile]
+)
+
+type ObjectFile interface {
+	Info() *Info
+	Reader() (*reader, func() error, error)
+	ELF() (*elf.File, error)
+}
 
 type Pool struct {
 	c burrow.Cache
 }
 
-func NewPool(logger log.Logger, reg prometheus.Registerer, size int) *Pool {
+func NewPool(logger log.Logger, reg prometheus.Registerer, profilingDuration time.Duration) *Pool {
 	return &Pool{
 		c: burrow.New(
-			// An ideal size for the pool needs to be determined.
-			// A lesser size will cause premature closing of files.
-			burrow.WithMaximumSize(size),
+			burrow.WithExpireAfterAccess(100*profilingDuration), //nocommit: 10*profilingDuration
 			burrow.WithRemovalListener(onRemoval(log.With(logger, "component", "objectfile_pool"))),
 			burrow.WithStatsCounter(cache.NewBurrowStatsCounter(logger, reg, "objectfile")),
 		),
 	}
 }
 
+func (p *Pool) Get(buildID string) (Reference, error) {
+	if val, ok := p.c.GetIfPresent(buildID); ok {
+		val, ok := val.(reference)
+		if !ok {
+			return nil, fmt.Errorf("unexpected type in cache: %T", val)
+		}
+
+		// @nocommit
+		return val.MustClone(), nil
+		// return val.Clone()
+	}
+
+	return nil, fmt.Errorf("no reference found for buildid %s", buildID)
+}
+
 // Open opens the specified executable or library file from the given path.
-func (p *Pool) Open(path string) (*ObjectFile, error) {
+// And creates a new ObjectFile reference.
+// The returned reference should be released after use.
+// The file will be closed when the reference is released.
+func (p *Pool) Open(path string) (Reference, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("error opening %s: %w", path, err)
@@ -54,8 +85,10 @@ func (p *Pool) Open(path string) (*ObjectFile, error) {
 	return p.NewFile(f)
 }
 
-// NewFile creates a new ObjectFile from an existing file.
-func (p *Pool) NewFile(f *os.File) (*ObjectFile, error) {
+// NewFile creates a new ObjectFile reference from an existing file.
+// The returned reference should be released after use.
+// The file will be closed when the reference is released.
+func (p *Pool) NewFile(f *os.File) (Reference, error) {
 	closer := func(err error) error {
 		if cErr := f.Close(); cErr != nil {
 			err = errors.Join(err, cErr)
@@ -96,29 +129,38 @@ func (p *Pool) NewFile(f *os.File) (*ObjectFile, error) {
 		if err := closer(nil); err != nil {
 			return nil, err
 		}
-		obj, ok := val.(ObjectFile)
+		ref, ok := val.(reference)
 		if !ok {
 			return nil, fmt.Errorf("unexpected type in cache: %T", val)
 		}
-		return &obj, nil
+
+		// @nocommit
+		return ref.MustClone(), nil
+		// return ref.Clone()
 	}
 
 	stat, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat the file: %w", err)
 	}
-	obj := ObjectFile{
+	obj := &objectFile{
 		mtx:  &sync.Mutex{},
 		file: f,
 		elf:  ef,
 
-		BuildID: buildID,
-		Path:    filePath,
-		Size:    stat.Size(),
-		Modtime: stat.ModTime(),
+		i: &Info{
+			BuildID: buildID,
+			Path:    filePath,
+			Size:    stat.Size(),
+			Modtime: stat.ModTime(),
+		},
 	}
-	p.c.Put(buildID, obj)
-	return &obj, nil
+
+	ref := rc.New[ObjectFile](obj, obj.close) // TODO(kakkoyun): Invalidate cache when resource is released.
+	p.c.Put(buildID, *ref)                    // Obtain a reference for the one we put in the cache.
+	// @nocommit
+	return ref.MustClone(), nil
+	// return ref.Clone()
 }
 
 // onRemoval is called when an object file is removed from the cache.
@@ -129,12 +171,14 @@ func (p *Pool) NewFile(f *os.File) (*ObjectFile, error) {
 // This case should be handled by the uploader by re-opening it.
 func onRemoval(logger log.Logger) func(key burrow.Key, value burrow.Value) {
 	return func(key burrow.Key, value burrow.Value) {
-		obj, ok := value.(ObjectFile)
+		ref, ok := value.(rc.Reference[ObjectFile])
 		if !ok {
 			panic(fmt.Errorf("unexpected type in cache: %T", value))
 		}
-		if err := obj.Close(); err != nil {
-			level.Error(logger).Log("msg", "failed to close object file", "err", err)
+		if err := ref.Release(); err != nil {
+			level.Error(logger).Log("msg", "failed to release object file file on removal", "err", err)
+			// @nocommit
+			panic(err)
 		}
 	}
 }

@@ -63,12 +63,16 @@ func Compiler(logger log.Logger, reg prometheus.Registerer, objFilePool *objectf
 			}
 			defer f.Close()
 
-			objFile, err := objFilePool.NewFile(f)
+			ref, err := objFilePool.NewFile(f)
 			if err != nil {
 				return nil, fmt.Errorf("failed to open ELF file for process %d: %w", pid, err)
 			}
 
-			buildID := objFile.BuildID
+			var (
+				objFile     = ref.Value()
+				objFileInfo = objFile.Info()
+				buildID     = objFileInfo.BuildID
+			)
 			value, ok := cache.GetIfPresent(buildID)
 			if ok {
 				cachedLabels, ok := value.(model.LabelSet)
