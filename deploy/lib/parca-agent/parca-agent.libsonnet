@@ -106,59 +106,6 @@ function(params) {
     ],
   },
 
-  podSecurityPolicy: {
-    apiVersion: 'policy/v1beta1',
-    kind: 'PodSecurityPolicy',
-    metadata: pa.metadata,
-    spec: {
-      allowPrivilegeEscalation: true,
-      allowedCapabilities: ['*'],
-      fsGroup: {
-        rule: 'RunAsAny',
-      },
-      runAsUser: {
-        rule: 'RunAsAny',
-      },
-      seLinux: {
-        rule: 'RunAsAny',
-      },
-      supplementalGroups: {
-        rule: 'RunAsAny',
-      },
-      privileged: true,
-      hostIPC: true,
-      hostNetwork: true,
-      hostPID: true,
-      readOnlyRootFilesystem: true,
-      volumes: [
-        'configMap',
-        'emptyDir',
-        'projected',
-        'secret',
-        'downwardAPI',
-        'persistentVolumeClaim',
-        'hostPath',
-      ],
-      allowedHostPaths+: [
-        {
-          pathPrefix: '/sys',
-        },
-        {
-          pathPrefix: '/boot',
-        },
-        {
-          pathPrefix: '/var/run/dbus',
-        },
-        {
-          pathPrefix: '/run',
-        },
-        {
-          pathPrefix: '/lib/modules',
-        },
-      ],
-    },
-  },
-
   role: {
     apiVersion: 'rbac.authorization.k8s.io/v1',
     kind: 'Role',
@@ -290,12 +237,18 @@ function(params) {
           path: '/healthy',
           port: 'http',
         },
+        failureThreshold: 5,
+        initialDelaySeconds: 10,
+        periodSeconds: 20,
       },
       readinessProbe: {
         httpGet: {
           path: '/ready',
           port: 'http',
         },
+        failureThreshold: 10,
+        initialDelaySeconds: 15,
+        periodSeconds: 20,
       },
       volumeMounts: [
         {

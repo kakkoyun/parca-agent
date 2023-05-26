@@ -31,7 +31,26 @@ function(serverVersion='v0.4.2')
     insecureSkipVerify: true,
     profilingCPUSamplingFrequency: 97,  // Better it to be a prime number.
     podMonitor: true,
-    // config: {
+    resources: {
+      limits: {
+        cpu: '100m',
+        memory: '512Mi',
+      },
+      requests: {
+        cpu: '10m',
+        memory: '128Mi',
+      },
+    },
+    config: {
+      scrape_configs: [
+        {
+          job_name: "default",
+          // @nocommit: Check demo or production environment.
+          labels: {
+            job: "default",
+          },
+        },
+      ],
     //   relabel_configs: [
     //     {
     //       source_labels: ['pid'],
@@ -39,7 +58,7 @@ function(serverVersion='v0.4.2')
     //       action: 'keep',
     //     },
     //   ],
-    // },
+    },
     //    debuginfoUploadDisable: true,
     //    containerRuntimeSocketPath: '/run/docker.sock',
   });
