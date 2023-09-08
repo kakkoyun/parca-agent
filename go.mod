@@ -6,6 +6,7 @@ toolchain go1.21.0
 
 require (
 	buf.build/gen/go/prometheus/prometheus/protocolbuffers/go v1.31.0-20230726221845-41588ce133c8.1
+	github.com/Masterminds/semver/v3 v3.2.1
 	github.com/alecthomas/kong v0.8.0
 	github.com/aquasecurity/libbpfgo v0.4.9-libbpf-1.2.0.0.20230817212518-21cf435d454e
 	github.com/cenkalti/backoff/v4 v4.2.1
@@ -22,7 +23,6 @@ require (
 	github.com/google/pprof v0.0.0-20230821062121-407c9e7a662f
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.0-rc.0.0.20230515140958-a18e1e2bacb2
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.0.0
-	github.com/hashicorp/go-version v1.6.0
 	github.com/klauspost/compress v1.16.7
 	github.com/minio/highwayhash v1.0.2
 	github.com/oklog/run v1.1.0
@@ -54,7 +54,7 @@ require (
 	go.uber.org/goleak v1.2.1
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1
 	golang.org/x/sync v0.3.0
-	golang.org/x/sys v0.11.0
+	golang.org/x/sys v0.12.0
 	google.golang.org/grpc v1.57.0
 	google.golang.org/protobuf v1.31.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -187,7 +187,7 @@ require (
 	golang.org/x/term v0.11.0 // indirect
 	golang.org/x/text v0.12.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
-	golang.org/x/tools v0.11.0 // indirect
+	golang.org/x/tools v0.12.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/api v0.138.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
