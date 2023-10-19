@@ -238,6 +238,8 @@ func TestExtractor_KeepOnlyDebug(t *testing.T) {
 }
 
 func TestExtractingCompressedSectionsWithKeepOnlyDebug(t *testing.T) {
+	t.Parallel()
+
 	testfiles := []string{
 		"./testdata/basic-cpp-dwarf",
 		"./testdata/basic-cpp-dwarf-compressed",
@@ -271,6 +273,8 @@ func TestExtractingCompressedSectionsWithKeepOnlyDebug(t *testing.T) {
 		ef.Close()
 
 		t.Run(fmt.Sprintf("testfile=%s", testfile), func(t *testing.T) {
+			t.Parallel()
+
 			buf := flexbuf.New()
 			f, err := os.Open(testfile)
 			require.NoError(t, err)
