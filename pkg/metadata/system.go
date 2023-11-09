@@ -55,10 +55,16 @@ func System() Provider {
 func setMetadata() {
 	release := "unknown"
 	revision := "unknown"
+	architecture := "unknown"
 
 	r, err := kernel.Release()
 	if err == nil {
 		release = r
+	}
+
+	m, err := kernel.Machine()
+	if err == nil {
+		architecture = m
 	}
 
 	b, err := buildinfo.FetchBuildInfo()
@@ -68,5 +74,6 @@ func setMetadata() {
 	labels = model.LabelSet{
 		"kernel_release": model.LabelValue(release),
 		"agent_revision": model.LabelValue(revision),
+		"arch":           model.LabelValue(architecture),
 	}
 }
