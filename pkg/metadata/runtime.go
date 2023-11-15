@@ -38,11 +38,6 @@ func Runtime(procfs procfs.FS, reg prometheus.Registerer) Provider {
 			return nil, ctx.Err()
 		}
 
-		p, err := procfs.Proc(pid)
-		if err != nil {
-			return nil, fmt.Errorf("failed to instantiate procfs for PID %d: %w", pid, err)
-		}
-
 		if rt, ok := cache.Get(pid); ok {
 			if rt == nil {
 				return nil, nil
@@ -51,6 +46,11 @@ func Runtime(procfs procfs.FS, reg prometheus.Registerer) Provider {
 				"runtime":         model.LabelValue(rt.Type),
 				"runtime_version": model.LabelValue(rt.Version.String()),
 			}, nil
+		}
+
+		p, err := procfs.Proc(pid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to instantiate procfs for PID %d: %w", pid, err)
 		}
 
 		rt, err := vm.Fetch(p)

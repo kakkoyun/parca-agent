@@ -38,11 +38,6 @@ func Interpreter(procfs procfs.FS, reg prometheus.Registerer) Provider {
 			return nil, ctx.Err()
 		}
 
-		p, err := procfs.Proc(pid)
-		if err != nil {
-			return nil, fmt.Errorf("failed to instantiate procfs for PID %d: %w", pid, err)
-		}
-
 		if interp, ok := cache.Get(pid); ok {
 			if interp == nil {
 				return nil, nil
@@ -51,6 +46,11 @@ func Interpreter(procfs procfs.FS, reg prometheus.Registerer) Provider {
 				"interpreter":     model.LabelValue(interp.Type.String()),
 				"runtime_version": model.LabelValue(interp.Version.String()),
 			}, nil
+		}
+
+		p, err := procfs.Proc(pid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to instantiate procfs for PID %d: %w", pid, err)
 		}
 
 		interp, err := interpreter.Fetch(p)
