@@ -70,7 +70,7 @@ func absolutePath(proc procfs.Proc, p string) string {
 	return path.Join("/proc/", strconv.Itoa(proc.PID), "/root/", p)
 }
 
-func IsInterpreter(proc procfs.Proc) (bool, error) {
+func IsRuntime(proc procfs.Proc) (bool, error) {
 	// First, let's check the executable's pathname since it's the cheapest and fastest.
 	exe, err := proc.Executable()
 	if err != nil {
@@ -107,7 +107,7 @@ func IsInterpreter(proc procfs.Proc) (bool, error) {
 	return false, nil
 }
 
-func versionFromSymbol(f *interpreterExecutableFile) (string, error) {
+func versionFromSymbol(f *os.File) (string, error) {
 	ef, err := elf.NewFile(f)
 	if err != nil {
 		return "", fmt.Errorf("new file: %w", err)
@@ -148,7 +148,7 @@ func versionFromBSS(f *interpreterExecutableFile) (string, error) {
 	return "", errors.New("version not found")
 }
 
-func versionFromPath(f *interpreterExecutableFile) (string, error) {
+func versionFromPath(f *os.File) (string, error) {
 	versionString, err := scanVersionPath([]byte(f.Name()))
 	if err != nil {
 		return "", fmt.Errorf("scan version string: %w", err)
@@ -462,7 +462,42 @@ func (i interpreter) interpHeadOffset() (uint64, error) {
 	}
 }
 
-func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
+func (i interpreter) Close() error {
+	if i.exe != nil {
+		if err := i.exe.Close(); err != nil {
+			return fmt.Errorf("close exe: %w", err)
+		}
+	}
+	if i.lib != nil {
+		if err := i.lib.Close(); err != nil {
+			return fmt.Errorf("close lib: %w", err)
+		}
+	}
+	return nil
+}
+
+func RuntimeInfo(proc procfs.Proc) (*runtime.Runtime, error) {
+	isPython, err := IsRuntime(proc)
+	if err != nil {
+		return nil, fmt.Errorf("is runtime: %w", err)
+	}
+	if !isPython {
+		return nil, nil //nolint:nilnil
+	}
+
+	rt := &runtime.Runtime{
+		Name: "python",
+	}
+
+	interpreter, err := newInterpreter(proc)
+	if err != nil {
+		return nil, fmt.Errorf("new interpreter: %w", err)
+	}
+	rt.Version = interpreter.version
+	return rt, nil
+}
+
+func newInterpreter(proc procfs.Proc) (*interpreter, error) {
 	maps, err := proc.ProcMaps()
 	if err != nil {
 		return nil, fmt.Errorf("error reading process maps: %w", err)
@@ -516,7 +551,7 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open executable: %w", err)
 		}
-		defer f.Close()
+
 		exe, err = newInterpreterExecutableFile(proc.PID, f, pythonExecutableStartAddress)
 		if err != nil {
 			return nil, fmt.Errorf("new elf file: %w", err)
@@ -527,7 +562,6 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open library: %w", err)
 		}
-		defer f.Close()
 
 		lib, err = newInterpreterExecutableFile(proc.PID, f, libpythonStartAddress)
 		if err != nil {
@@ -535,13 +569,13 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 		}
 	}
 
-	verionSources := []*interpreterExecutableFile{exe, lib}
+	versionSources := []*interpreterExecutableFile{exe, lib}
 	var versionString string
-	for _, source := range verionSources {
+	for _, source := range versionSources {
 		if source == nil {
 			continue
 		}
-		versionString, err = versionFromSymbol(source)
+		versionString, err = versionFromSymbol(source.File)
 		if versionString != "" && err == nil {
 			break
 		}
@@ -552,9 +586,9 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 		}
 	}
 	if versionString == "" {
-		for _, source := range verionSources {
+		for _, source := range versionSources {
 			// As a last resort, try to parse the version from the path.
-			versionString, err = versionFromPath(source)
+			versionString, err = versionFromPath(source.File)
 			if versionString != "" && err == nil {
 				break
 			}
@@ -563,14 +597,22 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 
 	version, err := semver.NewVersion(versionString)
 	if err != nil {
-		return nil, fmt.Errorf("new version: %w", err)
+		return nil, fmt.Errorf("new version: %q: %w", version, err)
 	}
 
-	interpreter := &interpreter{
+	return &interpreter{
 		exe:     exe,
 		lib:     lib,
 		version: version,
+	}, nil
+}
+
+func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
+	interpreter, err := newInterpreter(proc)
+	if err != nil {
+		return nil, fmt.Errorf("new interpreter: %w", err)
 	}
+	defer interpreter.Close()
 
 	threadStateAddress, err := interpreter.threadStateAddress()
 	if err != nil {
@@ -589,8 +631,11 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 	}
 
 	return &runtime.Interpreter{
+		Runtime: runtime.Runtime{
+			Name:    "Python",
+			Version: interpreter.version,
+		},
 		Type:               runtime.InterpreterPython,
-		Version:            interpreter.version,
 		MainThreadAddress:  threadStateAddress,
 		InterpreterAddress: interpreterAddress,
 	}, nil

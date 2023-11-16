@@ -108,7 +108,7 @@ func RuntimeInfo(proc procfs.Proc) (*runtime.Runtime, error) {
 	}
 
 	rt := &runtime.Runtime{
-		Type: "nodejs",
+		Name: "nodejs",
 	}
 
 	exe, err := proc.Executable()
@@ -126,7 +126,7 @@ func RuntimeInfo(proc procfs.Proc) (*runtime.Runtime, error) {
 	if err == nil {
 		version, err := semver.NewVersion(versionString)
 		if err != nil {
-			return rt, fmt.Errorf("new version, %s: %w", versionString, err)
+			return rt, fmt.Errorf("new version: %q: %w", versionString, err)
 		}
 		rt.Version = version
 		return rt, nil
@@ -169,7 +169,7 @@ func RuntimeInfo(proc procfs.Proc) (*runtime.Runtime, error) {
 
 	version, err := semver.NewVersion(versionString)
 	if err != nil {
-		return rt, fmt.Errorf("new version, %s: %w", versionString, err)
+		return rt, fmt.Errorf("new version: %q: %w", versionString, err)
 	}
 	rt.Version = version
 	return rt, nil
