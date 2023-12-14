@@ -85,14 +85,14 @@ OUT_PID_NAMESPACE := $(OUT_BPF_CONTAINED_DIR)/pid_namespace.bpf.o
 
 # CGO build flags:
 PKG_CONFIG ?= pkg-config
-CGO_CFLAGS_STATIC =-I$(abspath $(LIBBPF_HEADERS))
+CGO_CFLAGS_STATIC = -I$(abspath $(LIBBPF_HEADERS))
 CGO_CFLAGS ?= $(CGO_CFLAGS_STATIC)
-CGO_LDFLAGS_STATIC = -fuse-ld=$(LD) $(abspath $(LIBBPF_OBJ) $(LIBELF_OBJ) $(LIBZ_OBJ) $(LIBZSTD_OBJ))
+CGO_LDFLAGS_STATIC = -fuse-ld=$(LD) -L$(abspath $(LIBBPF_OBJ) $(LIBZ_OBJ) $(LIBZSTD_OBJ) $(LIBELF_OBJ))
 CGO_LDFLAGS ?= $(CGO_LDFLAGS_STATIC)
 
-CGO_EXTLDFLAGS =-extldflags=-static
+CGO_EXTLDFLAGS = -extldflags=-static
 CGO_CFLAGS_DYN = -I$(abspath $(LIBBPF_HEADERS))
-CGO_LDFLAGS_DYN = -L$(abspath $(LIBBPF_DIR)) -fuse-ld=$(LD) -lelf -lz -lzstd -lbpf
+CGO_LDFLAGS_DYN = -fuse-ld=$(LD) -L$(abspath $(LIBBPF_DIR)) -lelf -lz -lzstd -lbpf
 
 # possible other CGO flags:
 # CGO_CPPFLAGS ?=
