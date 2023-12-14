@@ -33,7 +33,6 @@ jobs:
           paths: |-
             [
               ".github/workflows/docs.yml",
-              ".go-version",
               "Makefile",
               "cmd/parca-agent/main.go",
               "docs"
@@ -49,32 +48,24 @@ jobs:
       - name: Check out the code
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - name: Set up Go
-        uses: actions/setup-go@93397bea11091df50f3d7e59dc26a7711a8bcfbe # v4.1.0
+      - name: Install devbox
+        uses: jetpack-io/devbox-install-action@v0.7.0
         with:
-          go-version-file: .go-version
+          enable-cache: true
 
-      - name: Set up Clang
-        uses: KyleMayes/install-llvm-action@be40c5af3a4adc3e4a03199995ab73aa37536712 # v1.9.0
+      - name: Setup devbox
+        run: devbox run -- echo "done!"
+
+      - name: Load devbox shellenv
+        uses: HatsuneMiku3939/direnv-action@v1
         with:
-          version: "14"
+          direnvVersion: 2.32.3
 
-      - name: Install libbpf dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -yq libelf-dev zlib1g-dev
-
-      - name: Initialize and update libbpf submodule
+      - name: Initialize and update submodules
         run: git submodule init && git submodule update
 
       - name: Build BPF
         run: make bpf
-
-      - name: Set up Jsonnet
-        run: ./env-jsonnet.sh
-
-      - name: Set up environment
-        run: ./env.sh
 
       - name: Build
         run: make build
