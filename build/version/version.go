@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
-	"github.com/magefile/mage/sh"
+	"github.com/go-git/go-git/v5"
+	"github.com/parca-dev/parca-agent/build"
 )
 
 const (
@@ -26,33 +28,28 @@ var (
 
 // Agent is the version of the agent.
 func Agent() (string, error) {
-	// TODO(kakkoyun): Convert pure Go.
-	// https://github.com/go-git/go-git
 	if agentVersion != nil {
 		return *agentVersion, nil
 	}
 
-	version := unknownVersion
-	hash, err := sh.Output("git", "log", "-n1", "--pretty='%h'")
+	repo, err := git.PlainOpen(filepath.Join(build.WorkingDirectory, ".git"))
 	if err != nil {
-		return version, err
+		return unknownVersion, fmt.Errorf("failed to open git repository. %s: %w", build.WorkingDirectory, err)
 	}
-	taggedVersion, err := sh.Output("git", "describe", "--exact-match", "--tags", hash)
+
+	ref, err := repo.Head()
+	if err != nil {
+		return unknownVersion, err
+	}
+
+	tag, err := repo.TagObject(ref.Hash())
 	if err == nil {
-		return taggedVersion, nil
+		version := tag.Name
+		agentVersion = &version
+		return version, nil
 	}
 
-	head, err := sh.Output("git", "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return version, err
-	}
-
-	shortHead, err := sh.Output("git", "rev-parse", "--short", "HEAD")
-	if err != nil {
-		return version, err
-	}
-
-	version = fmt.Sprintf("%s-%s-%s", head, shortHead, hash)
+	version := fmt.Sprintf("%s-%s", ref.Name().Short(), ref.Hash().String()[:8])
 	agentVersion = &version
 	return version, nil
 }

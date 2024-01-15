@@ -39,10 +39,6 @@ go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
 GORELEASER_VERSION='v1.22.1'
 go install "github.com/goreleaser/goreleaser@${GORELEASER_VERSION}"
 
-# renovate: datasource=go depName=github.com/brancz/gojsontoyaml
-GOJSONTOYAML_VERSION='v0.1.0'
-go install "github.com/brancz/gojsontoyaml@${GOJSONTOYAML_VERSION}"
-
 # renovate: datasource=go depName=github.com/campoy/embedmd
 EMBEDMD_VERSION='v2.0.0'
 go install "github.com/campoy/embedmd/v2@${EMBEDMD_VERSION}"

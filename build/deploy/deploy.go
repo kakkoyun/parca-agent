@@ -8,13 +8,14 @@ import (
 
 	"github.com/magefile/mage/mg"
 	"github.com/magefile/mage/sh"
+	"github.com/magefile/mage/target"
 
+	"github.com/parca-dev/parca-agent/build"
 	"github.com/parca-dev/parca-agent/build/tools"
 	"github.com/parca-dev/parca-agent/build/version"
 )
 
-// Relative to the root of the repository.
-const workingDirectory = "deploy"
+var workingDirectory = filepath.Join(build.WorkingDirectory, "deploy")
 
 var Default = Manifests.All
 
@@ -46,18 +47,9 @@ func findJsonnetFiles() ([]string, error) {
 
 // Format formats the code.
 func Format() error {
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
+	if err := ensureWorkingDirectory(); err != nil {
+		return err
 	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(fmt.Errorf("failed to change directory %s: %w", workingDirectory, err))
-	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(fmt.Errorf("failed to change directory %s: %w", pwd, err))
-		}
-	}()
 
 	jsonnetFiles, err := findJsonnetFiles()
 	if err != nil {
@@ -74,18 +66,18 @@ func Format() error {
 
 // Vendor installs the vendored dependencies.
 func Vendor() error {
-	pwd, err := os.Getwd()
+	if err := ensureWorkingDirectory(); err != nil {
+		return err
+	}
+
+	changed, err := target.Dir("vendor", "jsonnetfile.json", "jsonnetfile.lock.json")
 	if err != nil {
-		panic(err)
+		return err
 	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(fmt.Errorf("failed to change directory %s: %w", workingDirectory, err))
+
+	if !changed {
+		return nil
 	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(fmt.Errorf("failed to change directory %s: %w", pwd, err))
-		}
-	}()
 
 	return tools.RunGoTool(tools.JB, "install")
 }
@@ -96,28 +88,20 @@ type Manifests mg.Namespace
 func (Manifests) All() error {
 	mg.SerialDeps(Vendor, Format)
 
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
+	if err := ensureWorkingDirectory(); err != nil {
+		return err
 	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(err)
-		}
-	}()
 
 	agentVersion, err := version.Agent()
 	if err != nil {
 		return err
 	}
+	fmt.Println("Agent version:", agentVersion)
+
 	serverVersion, err := version.Server()
 	if err != nil {
 		return err
 	}
-	fmt.Println("Agent version:", agentVersion)
 	fmt.Println("Server version:", serverVersion)
 
 	mg.Deps(Manifests.Tilt, Manifests.Kubernetes, Manifests.OpenShift)
@@ -128,22 +112,17 @@ func (Manifests) All() error {
 func (Manifests) Tilt() error {
 	mg.SerialDeps(Vendor, Format)
 
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(err)
-		}
-	}()
-
-	if err := sh.Rm("manifests"); err != nil {
+	if err := ensureWorkingDirectory(); err != nil {
 		return err
 	}
+
+	if err := sh.Rm("tilt"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll("tilt", 0o755); err != nil {
+		return err
+	}
+
 	if err := tools.RunGoTool(tools.JSONNET, "-J", "vendor", "-m", "manifests", "tilt.jsonnet"); err != nil {
 		return err
 	}
@@ -154,22 +133,17 @@ func (Manifests) Tilt() error {
 func (Manifests) Kubernetes() error {
 	mg.SerialDeps(Vendor, Format)
 
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(err)
-		}
-	}()
-
-	if err := sh.Rm("manifests"); err != nil {
+	if err := ensureWorkingDirectory(); err != nil {
 		return err
 	}
+
+	if err := sh.Rm("manifests/kubernetes"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll("manifests/kubernetes", 0o755); err != nil {
+		return err
+	}
+
 	if err := tools.RunGoTool(tools.JSONNET, "-J", "vendor", "-m", "manifests", "kubernetes.jsonnet"); err != nil {
 		return err
 	}
@@ -180,24 +154,33 @@ func (Manifests) Kubernetes() error {
 func (Manifests) OpenShift() error {
 	mg.SerialDeps(Vendor, Format)
 
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	if err := os.Chdir(workingDirectory); err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := os.Chdir(pwd); err != nil {
-			panic(err)
-		}
-	}()
-
-	if err := sh.Rm("manifests"); err != nil {
+	if err := ensureWorkingDirectory(); err != nil {
 		return err
 	}
+
+	if err := sh.Rm("manifests/openshift"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll("manifests/openshift", 0o755); err != nil {
+		return err
+	}
+
 	if err := tools.RunGoTool(tools.JSONNET, "-J", "vendor", "-m", "manifests", "openshift.jsonnet"); err != nil {
 		return err
+	}
+	return nil
+}
+
+func ensureWorkingDirectory() error {
+	pwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+	if pwd == workingDirectory {
+		return nil
+	}
+	if err := os.Chdir(workingDirectory); err != nil {
+		return fmt.Errorf("failed to change directory %s: %w", workingDirectory, err)
 	}
 	return nil
 }

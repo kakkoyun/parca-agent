@@ -1,5 +1,5 @@
 run:
-  deadline: 5m
+  timeout: 5m
   skip-dirs:
     - tmp
 
@@ -56,6 +56,7 @@ issues:
       linters:
         - forbidigo
         - stylecheck
+        - gochecknoinits
 
 linters-settings:
   depguard:
