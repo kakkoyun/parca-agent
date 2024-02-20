@@ -61,9 +61,9 @@ jobs:
           go-version-file: .go-version
 
       - name: Set up Clang
-        uses: KyleMayes/install-llvm-action@be40c5af3a4adc3e4a03199995ab73aa37536712 # v1.9.0
+        uses: stellar-aria/llvm-embedded-toolchain-for-arm-action@latest
         with:
-          version: "14"
+          release: "14"
 
       - name: Install libbpf dependencies
         run: |
