@@ -207,7 +207,6 @@ typedef struct {
 
 // Executable mappings for a process.
 typedef struct {
-  u64 should_use_fp_by_default;
   u64 is_jit_compiler;
   u64 interpreter_type;
   u64 len;
@@ -718,6 +717,16 @@ static __always_inline void add_stack(struct bpf_perf_event_data *ctx, u64 pid_t
   }
 }
 
+// Note: `set_initial_state` must be called before this function.
+static __always_inline int unwind_wrapper(struct bpf_perf_event_data *ctx) {
+  LOG("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+  LOG("traversing native stack");
+  LOG("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+
+  bpf_tail_call(ctx, &programs, NATIVE_UNWINDER_PROGRAM_ID);
+  return 0;
+}
+
 static __always_inline void add_frame(unwind_state_t *unwind_state, u64 frame) {
   u64 len = unwind_state->stack.len;
   if (len >= 0 && len < MAX_STACK_DEPTH) {
@@ -783,13 +792,9 @@ int native_unwind(struct bpf_perf_event_data *ctx) {
       request_refresh_process_info(ctx, per_process_id);
       return 1;
     } else if (unwind_table_result == FIND_UNWIND_CHUNK_NOT_FOUND) {
-      if (proc_info->should_use_fp_by_default) {
-        LOG("[info] chunk not found, trying with frame pointers");
-        unwind_state->use_fp = true;
-        goto unwind_with_frame_pointers;
-      }
-      LOG("[info] chunk not found but fp unwinding not allowed");
-      return 1;
+      LOG("[info] chunk not found, trying with frame pointers");
+      unwind_state->use_fp = true;
+      goto unwind_with_frame_pointers;
     } else if (chunk_info == NULL) {
       LOG("[debug] chunks is null");
       reached_bottom_of_stack = true;
@@ -840,7 +845,7 @@ int native_unwind(struct bpf_perf_event_data *ctx) {
 
     if (found_cfa_type == CFA_TYPE_END_OF_FDE_MARKER) {
       // If we are past the marker, this means that we don't have unwind info.
-      if (unwind_state->ip - offset > found_pc && proc_info->should_use_fp_by_default) {
+      if (unwind_state->ip - offset > found_pc) {
         bpf_printk("[info]  no unwind info for PC, using frame pointers");
         unwind_state->use_fp = true;
         goto unwind_with_frame_pointers;
@@ -1074,7 +1079,7 @@ int native_unwind(struct bpf_perf_event_data *ctx) {
   } else if (unwind_state->stack.len < MAX_STACK_DEPTH && unwind_state->tail_calls < MAX_TAIL_CALLS) {
     LOG("Continuing walking the stack in a tail call, current tail %d", unwind_state->tail_calls);
     unwind_state->tail_calls++;
-    bpf_tail_call(ctx, &programs, NATIVE_UNWINDER_PROGRAM_ID);
+    unwind_wrapper(ctx);
   }
 
   // We couldn't get the whole stacktrace.
@@ -1136,16 +1141,6 @@ static __always_inline bool set_initial_state(struct bpf_perf_event_data *ctx) {
   add_frame(unwind_state, unwind_state->ip);
 
   return true;
-}
-
-// Note: `set_initial_state` must be called before this function.
-static __always_inline int unwind_wrapper(struct bpf_perf_event_data *ctx) {
-  LOG("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
-  LOG("traversing native stack");
-  LOG("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
-
-  bpf_tail_call(ctx, &programs, NATIVE_UNWINDER_PROGRAM_ID);
-  return 0;
 }
 
 SEC("perf_event")

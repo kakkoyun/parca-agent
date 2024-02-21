@@ -55,7 +55,6 @@ import (
 	bpfprograms "github.com/parca-dev/parca-agent/pkg/profiler/cpu/bpf/programs"
 	"github.com/parca-dev/parca-agent/pkg/rlimit"
 	"github.com/parca-dev/parca-agent/pkg/runtime"
-	"github.com/parca-dev/parca-agent/pkg/stack/unwind"
 )
 
 const (
@@ -121,8 +120,7 @@ type CPU struct {
 	bpfProgramLoaded chan bool
 	bpfMaps          *bpfmaps.Maps
 
-	framePointerCache unwind.FramePointerCache
-	interpSymTab      profile.InterpreterSymbolTable
+	interpSymTab profile.InterpreterSymbolTable
 
 	byteOrder binary.ByteOrder
 
@@ -156,9 +154,6 @@ func NewCPUProfiler(
 		processInfoManager: processInfoManager,
 		profileConverter:   profileConverter,
 		profileStore:       profileWriter,
-
-		// CPU profiler specific caches.
-		framePointerCache: unwind.NewHasFramePointersCache(logger, reg, compilerInfoManager),
 
 		byteOrder: byteorder.GetHostByteOrder(),
 
@@ -423,20 +418,8 @@ func (p *CPU) listenEvents(ctx context.Context, eventsChan <-chan []byte, lostCh
 						return
 					}
 
-					executable := fmt.Sprintf("/proc/%d/exe", pid)
-					shouldUseFPByDefault, err := p.framePointerCache.HasFramePointers(executable) // nolint:contextcheck
-					if err != nil {
-						// It might not exist as reading procfs is racy. If the executable has no symbols
-						// that we use as a heuristic to detect whether it has frame pointers or not,
-						// we assume it does not and that we should generate the unwind information.
-						level.Debug(p.logger).Log("msg", "frame pointer detection failed", "executable", executable, "err", err)
-						if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, elf.ErrNoSymbols) {
-							return
-						}
-					}
-
 					// Process information has been refreshed, now refresh the mappings and their unwind info.
-					p.bpfMaps.RefreshProcessInfo(pid, shouldUseFPByDefault)
+					p.bpfMaps.RefreshProcessInfo(pid)
 					refreshInProgress.Delete(pid)
 				}
 			}
@@ -560,25 +543,15 @@ func (p *CPU) onDemandUnwindInfoBatcher(ctx context.Context, requestUnwindInfoCh
 }
 
 func (p *CPU) addUnwindTableForProcess(ctx context.Context, pid int) {
-	executable := fmt.Sprintf("/proc/%d/exe", pid)
-	shouldUseFPByDefault, err := p.framePointerCache.HasFramePointers(executable) // nolint:contextcheck
-	if err != nil {
-		// It might not exist as reading procfs is racy. If the executable has no symbols
-		// that we use as a heuristic to detect whether it has frame pointers or not,
-		// we assume it does not and that we should generate the unwind information.
-		level.Debug(p.logger).Log("msg", "frame pointer detection failed", "executable", executable, "err", err)
-		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, elf.ErrNoSymbols) {
-			return
-		}
-	}
-
 	level.Debug(p.logger).Log("msg", "prefetching process info", "pid", pid)
 	if err := p.prefetchProcessInfo(ctx, pid); err != nil {
 		return
 	}
 
 	level.Debug(p.logger).Log("msg", "adding unwind tables", "pid", pid)
-	if err = p.bpfMaps.AddUnwindTableForProcess(pid, nil, true, shouldUseFPByDefault); err == nil {
+
+	err := p.bpfMaps.AddUnwindTableForProcess(pid, nil, true)
+	if err == nil {
 		// Happy path.
 		return
 	}

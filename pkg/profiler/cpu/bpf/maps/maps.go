@@ -99,14 +99,13 @@ const (
 		} mapping_t;
 
 		typedef struct {
-			u64 should_use_fp_by_default;
 			u64 is_jit_compiler;
 			u64 interpreter_type;
 			u64 len;
 			mapping_t mappings[MAX_MAPPINGS_PER_PROCESS];
 		} process_info_t;
 	*/
-	mappingInfoSizeBytes = 8*4 + (maxMappingsPerProcess * 8 * 5)
+	mappingInfoSizeBytes = 8*3 + (maxMappingsPerProcess * 8 * 5)
 	/*
 		TODO: once we generate the bindings automatically, remove this.
 
@@ -1115,7 +1114,7 @@ func (m *Maps) resetMappingInfoBuffer() error {
 
 // RefreshProcessInfo updates the process information such as mappings and unwind
 // information if the executable mappings have changed.
-func (m *Maps) RefreshProcessInfo(pid int, shouldUseFPByDefault bool) {
+func (m *Maps) RefreshProcessInfo(pid int) {
 	level.Debug(m.logger).Log("msg", "refreshing process info", "pid", pid)
 
 	cachedHash, _ := m.processCache.Get(pid)
@@ -1137,7 +1136,7 @@ func (m *Maps) RefreshProcessInfo(pid int, shouldUseFPByDefault bool) {
 	}
 
 	if cachedHash != currentHash {
-		err := m.AddUnwindTableForProcess(pid, executableMappings, false, shouldUseFPByDefault)
+		err := m.AddUnwindTableForProcess(pid, executableMappings, false)
 		if err != nil {
 			m.metrics.refreshProcessInfoErrors.WithLabelValues(labelUnwindTableAdd).Inc()
 			level.Error(m.logger).Log("msg", "addUnwindTableForProcess failed", "err", err)
@@ -1149,7 +1148,7 @@ func (m *Maps) RefreshProcessInfo(pid int, shouldUseFPByDefault bool) {
 // 2. For each section, generate compact table
 // 3. Add table to maps
 // 4. Add map metadata to process
-func (m *Maps) AddUnwindTableForProcess(pid int, executableMappings unwind.ExecutableMappings, checkCache, shouldUseFPByDefault bool) error {
+func (m *Maps) AddUnwindTableForProcess(pid int, executableMappings unwind.ExecutableMappings, checkCache bool) error {
 	// Notes:
 	//	- perhaps we could cache based on `start_at` (but parsing this procfs file properly
 	// is challenging if the process name contains spaces, etc).
@@ -1193,14 +1192,6 @@ func (m *Maps) AddUnwindTableForProcess(pid int, executableMappings unwind.Execu
 	}
 
 	mappingInfoMemory := m.mappingInfoMemory.Slice(mappingInfoSizeBytes)
-
-	var lol uint64
-	if shouldUseFPByDefault {
-		lol = 1
-	}
-
-	// .should_use_fp_by_default
-	mappingInfoMemory.PutUint64(lol)
 
 	// .is_jit_compiler
 	mappingInfoMemory.PutUint64(isJITCompiler)
