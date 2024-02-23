@@ -855,6 +855,7 @@ func (m *Maps) AddInterpreter(pid int, interpreter runtime.Interpreter) error {
 		m.syncedInterpreters.Add(pid, interpreter)
 	case runtime.InterpreterPython:
 		interpreterInfo := pyperf.InterpreterInfo{
+			InterpreterAddr:      interpreter.InterpreterAddress,
 			ThreadStateAddr:      interpreter.MainThreadAddress,
 			PyVersionOffsetIndex: i,
 		}

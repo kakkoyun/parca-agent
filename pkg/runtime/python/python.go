@@ -320,13 +320,13 @@ func (i interpreter) findAddressOf(s string) (uint64, error) {
 }
 
 func (i interpreter) threadStateAddress() (uint64, error) {
-	const37_11, err := semver.NewConstraint(">=3.7.x")
+	const37above, err := semver.NewConstraint(">=3.7.x")
 	if err != nil {
 		return 0, fmt.Errorf("new constraint: %w", err)
 	}
 
 	switch {
-	case const37_11.Check(i.version):
+	case const37above.Check(i.version):
 		addr, err := i.findAddressOf(pythonRuntimeSymbol) // _PyRuntime
 		if err != nil {
 			return 0, fmt.Errorf("findAddressOf: %w", err)
@@ -337,23 +337,25 @@ func (i interpreter) threadStateAddress() (uint64, error) {
 		}
 		return addr + uint64(initialState.ThreadStateCurrent), nil
 	// Older versions (<3.7.0) of Python do not have the _PyRuntime struct.
-	default:
+	case const37.Check(i.version):
 		addr, err := i.findAddressOf(pythonThreadStateSymbol) // _PyThreadState_Current
 		if err != nil {
 			return 0, fmt.Errorf("findAddressOf: %w", err)
 		}
 		return addr, nil
+	default:
+		return 0, fmt.Errorf("unsupported version: %s", i.version.String())
 	}
 }
 
 func (i interpreter) interpreterAddress() (uint64, error) {
-	const37_11, err := semver.NewConstraint(">=3.7.x")
+	const37above, err := semver.NewConstraint(">=3.7.x")
 	if err != nil {
 		return 0, fmt.Errorf("new constraint: %w", err)
 	}
 
 	switch {
-	case const37_11.Check(i.version):
+	case const37above.Check(i.version):
 		addr, err := i.findAddressOf(pythonRuntimeSymbol) // _PyRuntime
 		if err != nil {
 			return 0, fmt.Errorf("findAddressOf: %w", err)
@@ -527,6 +529,7 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 	}
 	defer interpreter.Close()
 
+	// >=3.7 uses _PyRuntime, <3.7 uses _PyThreadState_Current
 	threadStateAddress, err := interpreter.threadStateAddress()
 	if err != nil {
 		return nil, fmt.Errorf("python version: %s, thread state address: %w", interpreter.version.String(), err)
@@ -535,6 +538,7 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 		return nil, fmt.Errorf("invalid address, python version: %s, thread state address: 0x%016x", interpreter.version.String(), threadStateAddress)
 	}
 
+	// >=3.7 uses _PyRuntime, <3.7 uses interp_head
 	interpreterAddress, err := interpreter.interpreterAddress()
 	if err != nil {
 		return nil, fmt.Errorf("python version: %s, interpreter address: %w", interpreter.version.String(), err)
@@ -542,6 +546,8 @@ func InterpreterInfo(proc procfs.Proc) (*runtime.Interpreter, error) {
 	if interpreterAddress == 0 {
 		return nil, fmt.Errorf("invalid address, python version: %s, interpreter address: 0x%016x", interpreter.version.String(), interpreterAddress)
 	}
+
+	// NOTICE: The interpreter address and the thread state address are the same for Python 3.7+.
 
 	return &runtime.Interpreter{
 		Runtime: runtime.Runtime{

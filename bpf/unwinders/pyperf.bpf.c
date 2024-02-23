@@ -94,13 +94,18 @@ static __always_inline long unsigned int read_tls_base(struct task_struct *task)
   return tls_base;
 }
 
+static __always_inline void printDebugOffsets(_Py_DebugOffsets *offsets) {
+  LOG("offsets->version %d", offsets->version);
+  LOG("offsets->thread_state.thread_id %d", offsets->thread_state.thread_id);
+  LOG("offsets->thread_state.native_thread_id %d", offsets->thread_state.native_thread_id);
+}
+
 //
 //   ╔═════════════════════════════════════════════════════════════════════════╗
 //   ║ BPF Programs                                                            ║
 //   ╚═════════════════════════════════════════════════════════════════════════╝
 //
-SEC("perf_event")
-int unwind_python_stack(struct bpf_perf_event_data *ctx) {
+SEC("perf_event") int unwind_python_stack(struct bpf_perf_event_data *ctx) {
   u64 zero = 0;
   unwind_state_t *unwind_state = bpf_map_lookup_elem(&heap, &zero);
   if (unwind_state == NULL) {
@@ -155,11 +160,25 @@ int unwind_python_stack(struct bpf_perf_event_data *ctx) {
   // state->stack.expected_size = (base_stack - cfp) / control_frame_t_sizeof;
   __builtin_memset((void *)state->sample.stack.addresses, 0, sizeof(state->sample.stack.addresses));
 
+  // Fetch _Py_DebugOffsets.
+
+  // GDB: ((PyRuntimeState *)_PyRuntime).debug_offsets
+
+  LOG("interpreter_info->interpreter_addr 0x%llx", interpreter_info->interpreter_addr);
+  _Py_DebugOffsets debug_offsets;
+  int err = bpf_probe_read_user(&debug_offsets, sizeof(debug_offsets), (void *)(long)interpreter_info->interpreter_addr);
+  if (err != 0) {
+    LOG("[error] bpf_probe_read_user failed with %d", err);
+    goto submit_without_unwinding;
+  }
+
+  printDebugOffsets(&debug_offsets);
+
   // Fetch thread state.
 
   // GDB: ((PyThreadState *)_PyRuntime.gilstate.tstate_current)
   LOG("interpreter_info->thread_state_addr 0x%llx", interpreter_info->thread_state_addr);
-  int err = bpf_probe_read_user(&state->thread_state, sizeof(state->thread_state), (void *)(long)interpreter_info->thread_state_addr);
+  err = bpf_probe_read_user(&state->thread_state, sizeof(state->thread_state), (void *)(long)interpreter_info->thread_state_addr);
   if (err != 0) {
     LOG("[error] failed to read interpreter_info->thread_state_addr with %d", err);
     goto submit_without_unwinding;
